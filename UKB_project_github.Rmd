@@ -1,0 +1,3444 @@
+---
+title: "Studying individual risk factors of self-harm in the UK Biobank"
+author: "Kai Lim"
+date: "14/04/2020"
+output: 
+  rmdformats::readthedown:
+    code_folding: hide
+    toc_depth: 4
+---
+
+# Introduction 
+
+This is one of my PhD projects, where I study the aetiology of self-harm by strengthening the causal inference using two genomic data science methods: Polygenic scoring and Mendelian randomisation. 
+
+The project is currently published on PloS Medicine, a high-impact medical journal. You can access the article [here](https://journals.plos.org/plosmedicine/article?id=10.1371/journal.pmed.1003137).
+
+The scripts below are a combination of shell and R scripts. We will go through the steps taken and scripts used in completing the project. On hindsight, lots of the steps could be taken using Tidyverse/dplyr functions, but I was new to the Tidyverse at that time.
+
+# 1: Prepare the dataset
+
+## Prepare dataset for PRS analyses
+
+These are shell scripts. Output of this chunk is "selfharm_small_15_Feb.txt" and "selfharm_big_15_Feb.txt". The "small" dataset contains PRS at p value < 0.3 threshold only (which were used for main analyses), whereas the "big" dataset contains PRS at all thresholds. 
+
+The "small" dataset is used heavily in main analyses, whereas the "big" dataset was used to generate the R^2^ plot in supplementary materials to justify the usage of p < 0.3 threshold. 
+
+Note that I have "anonymised" the file paths since the script will be shared publicly.
+
+### Extract phenotypes 
+```{bash dataset for PRS, eval=F, echo=T}
+#import all dataset to dataset directory
+#awk sex, age, suicidal and non-suicidal self-harm data.
+awk '{print $1, $1, $3, $6, $1655, $1656}' original_phenotype_file.txt > ./data/phenotypes1108.txt
+```
+
+### Merge phenotypes and covariates
+```{bash step 1, eval=F, echo=T}
+###########  1. Merging the phenotypes and covariates  ##########                      
+# Open R on shell terminal
+module add bioinformatics/R/3.5.0 #ex with R then just open R by typing R
+R # Open R
+library(data.table)
+pheno=fread("phenotypes1108.txt", verbose=T)
+names(pheno)[1]<-"FID" #change column name
+names(pheno)[2]<-"IID"
+
+covariates=fread("covariates.txt", verbose=T)
+
+pheno=as.data.frame(pheno, col.names=names(pheno))
+covariates=as.data.frame(covariates, col.names=names(covariates))
+
+# check numbers of non-suicidal self-harm and suicidal self-harm.
+table(pheno$f.20480.0.0, useNA="always") #ever self-harmed
+table(pheno$f.20483.0.0, useNA="always") #ever attempted suicide
+#all phenotypes data count is the same as presented in UK Biobank wesbsite!!
+
+#merge pheno and covariates into a new dataset
+selfharmc <- merge(pheno,covariates,by=c("IID","FID"), all.x=T, all.y=T) #merging all NA cells too.
+
+# change the class of some data to what we wanted e.g. factor. 
+selfharmc$sex=NA; selfharmc$sex=as.factor(selfharmc$f.31.0.0)
+selfharmc$age=NA; selfharmc$age=2018-selfharmc$f.34.0.0
+
+###### 2. Exporting and re-reading the data - phenotypes + covariates #######
+
+fwrite(selfharmc,"selfharm.pheno.covariates.1108.txt",verbose=T)
+selfharm2=fread("selfharm.pheno.covariates.1108.txt",verbose=T)
+head(selfharm2$batch)
+#problem: empty strings are regarded as a new level.....
+#resolve: some tweaks here and there: 106,22,2 levels each. 
+selfharm2[selfharm2$batch==""] <- NA
+selfharm2$AC<-as.factor(selfharm2$assessment_centre)
+selfharm2$sexL<-as.factor(selfharm2$sex)
+selfharm2$batchL<-as.factor(selfharm2$batch)
+str(selfharm2$AC);str(selfharm2$sexL);str(selfharm2$batchL)
+# file is renamed as "selfharm.pheno.covariates.1209.txt" in "publication_analyses/data" folder
+#the codes above are needed to make sure the factoring is proper - NAs are not part of the levels
+```
+
+### Merge PRS with the dataset
+```{bash step 3, eval=F, echo=T}
+###########  3. Merging the PRS data with other data - covariates + pheno + PRS                        
+# awk out the PRS into personal folders 
+#tips for editing multiple lines https://twitter.com/i_steves/status/995394452821721088 
+cd /file/path/to/PRS_folder
+
+cp {"ADHD02_header.all.score","ADHD05_header.all.score","AGAB01_header.all.score","AGGR01_header.all.score","ALCO01_header.all.score","ANXI01_header.all.score","ANXI02_header.all.score","BIPO01_header.all.score","BODY02_header.all.score","BODY04_header.all.score","CANU01_header.all.score","CHOL20_header.all.score","COGN01_header.all.score","CONS01_header.all.score","CROS01_header.all.score","DEPR07_header.all.score","EXTR01_header.all.score","HEIG01_header.all.score","HEIG03_header.all.score","OVER01_header.all.score","SCHI02_header.all.score","SCLE02_header.all.score","SMOK03_header.all.score","WEIG01_header.all.score"} /destination/directory
+
+## Use R for further data wrangling and further edit headers as we added new PRS at later stage of analyses
+module add bioinformatics/R/3.5.0 #ex with R then just open R by typing R
+R
+library(data.table)
+setwd("/PRS_folder")
+antisoc=fread("antisocbeh.all.score", verbose=T)
+alcdep=fread("alcdep2.all.score", verbose=T)
+neur=fread("neur_irt.all.score",verbose=T)
+ADHD02=fread("ADHD02_header.all.score",verbose=T)
+#change column names
+colnames(antisoc)=c("FID","IID","ANTI01_1e-05","ANTI01_0.001", "ANTI01_0.01","ANTI01_0.05","ANTI01_0.1","ANTI01_0.2","ANTI01_0.3","ANTI01_0.4","ANTI01_0.5","ANTI01_1")
+colnames(alcdep)=c("FID","IID","ALCD03_1e-05","ALCD03_0.001", "ALCD03_0.01","ALCD03_0.05","ALCD03_0.1","ALCD03_0.2","ALCD03_0.3","ALCD03_0.4","ALCD03_0.5","ALCD03_1")
+colnames(neur)=c("FID","IID","NEUR04_1e-05","NEUR04_0.001", "NEUR04_0.01","NEUR04_0.05","NEUR04_0.1","NEUR04_0.2","NEUR04_0.3","NEUR04_0.4","NEUR04_0.5","NEUR04_1")
+
+fwrite(antisoc,"ANTI01_header.all.score",verbose=T)
+fwrite(alcdep,"ALCD03_header.all.score2",verbose=T)
+fwrite(neur,"NEUR04_header.all.score",verbose=T)
+
+# merge all the PRS as one txt file. 
+#all 24 PRS
+#merge the PRS files using the function multmerge
+multmerge = function(mypath){
+  filenames=list.files(path=mypath, full.names=TRUE)
+  datalist = lapply(filenames, function(x){fread(file=x,header=T)})
+  Reduce(function(x,y) {merge(x,y, by=c("IID","FID"), all.x=T, all.y=T)}, datalist)
+}
+
+
+PRSdata=multmerge("/PRS_folder/")
+head(PRSdata)
+dim(PRSdata)
+str(PRSdata,list.len=ncol(PRSdata))
+fwrite(PRSdata, file="PRSdata.txt")
+
+### check if the data is there
+PRSdata2=fread("PRSdata.txt")
+dim(PRSdata2)
+str(PRSdata2)
+table(is.na(PRSdata2[,4]))
+#compare length with unmerged data
+PRSdata3=fread("ADHD02_header.all.score")
+dim(PRSdata3)
+#comparison is OK
+
+#extract the PRS with p-value threshold of 0.3 - best threshold for current dataset.
+myvar=c("IID","FID","ADHD02_0.3","ADHD05_0.3","AGAB01_0.3","AGGR01_0.3","ALCO01_0.3","ALCD03_0.3","ANTI01_0.3","ANXI01_0.3","ANXI02_0.3","BIPO01_0.3","BODY02_0.3","BODY04_0.3","CANU01_0.3","CHOL20_0.3","COGN01_0.3","CONS01_0.3","CROS01_0.3","DEPR07_0.3","EXTR01_0.3","HEIG01_0.3","HEIG03_0.3","NEUR04_0.3","OVER01_0.3","SCHI02_0.3","SCLE02_0.3","SMOK03_0.3","WEIG01_0.3")
+length(myvar)
+newPRSdata=PRSdata2[,myvar,with=F]
+str(newPRSdata)
+
+# merge PRSdata2 (bigger dataset) and newPRSdata (smaller dataset) 
+# with "selfharm.pheno.covariates.1108.txt" separately......
+setwd("path/to/data/directory")
+selfharm=fread("selfharm.pheno.covariates.1209.txt",verbose=T)
+
+selfharm.small <- merge(selfharm,newPRSdata,by=c("IID","FID"), all.x=T, all.y=T)
+dim(selfharm.small);str(selfharm.small)
+head(selfharm.small)
+fwrite(selfharm.small, file="selfharm_small_15_Feb.txt")
+selfharm.big<- merge(selfharm,PRSdata2,by=c("IID","FID"), all.x=T, all.y=T)
+fwrite(selfharm.big,file="selfharm_big_15_Feb.txt")
+dim(selfharm.small);dim(selfharm.big)
+str(selfharm.small);str(selfharm.big)
+#testing the files - identical or not?
+selfharm.small.test=fread("selfharm_small_15_Feb.txt",verbose=T)
+str(selfharm.small.test)
+dim(selfharm.small.test);dim(selfharm.small)
+```
+
+## Prepare dataset for MR analyses
+
+### Download GWAS sumstats
+```{bash prepare dataset for MR analyses, eval=F, echo=T}
+# Create a new directory, "GWAS_sumstats"
+cd /data/GWAS_sumstats
+
+# Only an example is given here:
+# download sumstats for self-harm
+wget https://www.dropbox.com/s/28my5g965hrwbsf/20480.gwas.imputed_v3.both_sexes.tsv.bgz?dl=0 -O 20480.gwas.imputed_v3.both_sexes.tsv.bgz
+# unzip the gwas sumstats
+gunzip 20480.gwas.imputed_v3.both_sexes.tsv.gz
+# check the sumstats
+head -10 20480.gwas.imputed_v3.both_sexes.tsv
+head -10 variants.tsv
+```
+
+### Preprocess sumstats
+```{bash prepare-MR, eval=F, echo=T}
+## Open R in bash
+cd /data/GWAS_sumstats
+module add bioinformatics/R/3.5.0 
+R
+library(data.table)
+library(TwoSampleMR)
+library(MendelianRandomization)
+library(gmodels)
+
+# columns needed for MR are: SNP, beta (log OR), SE, effect_allele (A1/tested allele/reference allele) and
+# non-effective allele, p-value
+adhd=fread("ADHD05",verbose=T)
+rm(adhd)
+alcdraw=fread("pgc_alcdep.eur_unrel_genotyped.aug2018_release.txt",verbose=T)
+bipo=fread("BIPO01",verbose=T)
+rm(bipo)
+canu=fread("CANU01",verbose=T)
+rm(canu)
+cros=fread("CROS01",verbose=T)
+rm(cros)
+depr=fread("DEPR07",verbose=T)
+rm(depr)
+schi=fread("SCHI02",verbose=T)
+
+head(adhd);dim(adhd)
+head(bipo);dim(bipo)
+head(canu);dim(canu) #canu already in beta, not OR
+head(cros);dim(cros)
+head(depr);dim(depr)
+head(schi);dim(schi)
+
+adhd$beta=log(adhd$OR) # To get the beta estimates, we take the logarithm of the odds ratio [log(OR)]
+adhd$beta_se=adhd$SE/adhd$OR # To get the standard errors of the beta estimates, we have to divide the original standard errors of the odds ratios [SE(OR)] by the odds ratios [SE(OR)/OR]
+
+alcdraw$beta=log(alcdraw$OR)
+alcdraw$beta_se=alcdraw$SE/alcdraw$OR
+
+bipo$beta=log(bipo$OR) 
+bipo$beta_se=bipo$SE/bipo$OR 
+
+depr$beta=log(depr$OR)
+depr$beta_se=depr$SE/depr$OR
+
+schi$beta=log(schi$OR)
+schi$beta_se=schi$SE/schi$OR
+
+# The ADHD summary statistics containing the converted effect size can now be exported and saved as a new file in our "GWAS_data" folder
+#for adhd data,
+# SNP                 -> column 1
+# beta                -> column 11
+# SE                  -> column 12
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 6
+# effect_allele freq -> column 7
+
+#for bipo data,
+# SNP                 -> column 1
+# beta                -> column 11
+# SE                  -> column 12
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 6
+# effect_allele freq -> column 7
+
+#for canu data,
+# SNP                 -> column 1
+# beta                -> column 8
+# SE                  -> column 9
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 7
+# effect_allele freq -> column 6
+
+#for cros data,
+# SNP                 -> column 1
+# beta                -> column 11
+# SE                  -> column 12
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 6
+# effect_allele freq -> column 7
+
+#for depr data,
+# SNP                 -> column 1
+# beta                -> column 15
+# SE                  -> column 16
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 8
+# effect_allele freq -> column 6, but also extract column 7
+
+#for schi data,
+# SNP                 -> column 1
+# beta                -> column 15
+# SE                  -> column 16
+# effect_allele       -> column 4
+# non-effective allele -> column 5
+# p-value             -> column 8
+# effect_allele freq -> column 6, but also extract column 7
+
+write.table(adhd[,c(1,4,5,6,7,11,12)], "ADHD", col.names=T, row.names=F, quote=F,sep = "\t") 
+write.table(alcdraw[,c(1,2,4,5,9,11,12)], "ALCD", col.names=T, row.names=F, quote=F,sep = "\t") 
+write.table(bipo[,c(1,4,5,6,7,11,12)], "BIPO", col.names=T, row.names=F, quote=F,sep = "\t") 
+write.table(canu[,c(1,4,5,6,7,8,9)], "CANU", col.names=T, row.names=F, quote=F,sep = "\t") 
+write.table(depr[,c(1,4,5,6,7,8,15,16)], "DEPR", col.names=T, row.names=F, quote=F,sep = "\t") 
+write.table(schi[,c(1,4,5,6,7,8,15,16)], "SCHI", col.names=T, row.names=F, quote=F,sep = "\t") 
+
+
+# For self-harm data, 
+# SNP                 -> column 6 of variants file
+# beta                -> column 9 of gwas file
+# SE                  -> column 10 of gwas file
+# effect_allele       -> column 5 of variants file (alt allele)
+# non-effective allele -> column 4 of variants file (ref allele)
+# p-value             -> column 12 of gwas file
+# effect_allele freq -> column 13 in variants file
+# gwas file: c(1,9,10,12)
+# variants file: c(1,4,5,6,13)
+sh_gwas=fread("20480.gwas.imputed_v3.both_sexes.tsv",verbose=T, select=c(1,9,10,12))
+head(sh_gwas)
+str(sh_gwas)
+## added on 14 Feb 2020 for SSH
+ssh_gwas=fread("20483.gwas.imputed_v3.both_sexes.tsv",verbose=T, select=c(1,9,10,12))
+head(ssh_gwas)
+#problem: no SNP id (rsid) for this dataset
+#download variants.tsv file from Neal's lab which contains SNP id 
+variants=fread("variants.tsv",verbose=T, select=c(1,4,5,6,13))
+tally=identical(variants$variant,sh_gwas$variant) #see if they are identical
+tally2=identical(variants$variant,ssh_gwas$variant) #see if they are identical
+#merge sh_gwas and variants
+sh_gwas_variants=merge(variants,sh_gwas,by=c("variant"), all.x=T, all.y=T)
+write.table(sh_gwas_variants, "selfharm_sumstats_v2", col.names=T, row.names=F, quote=F,sep = "\t") 
+
+#do the same thing for ssh_gwas
+ssh_gwas_variants=merge(variants,ssh_gwas,by=c("variant"), all.x=T, all.y=T)
+write.table(ssh_gwas_variants, "ssh_sumstats_v2", col.names=T, row.names=F, quote=F,sep = "\t") 
+system("head ssh_sumstats_v2") # see if the merged file is okay
+```
+
+## Prepare dataset for complementary analyses
+
+Pulling in data for cases. The code below shows for multiple psychiatric condition but for the project we only did analyses for SCHI and DEPR because other conditions have too little number of cases. 
+
+```{bash Pulling in data for cases, eval=F, echo=T}
+#for SCHI
+cd data/phenotypes
+grep Non.cancer.illness.code.self.reported field_finder.txt #5793-5879 non cancer illness code self-reported
+grep 20544 field_finder.txt  #13039-13054 for mental health problems ever diagnosed
+
+
+#self-report
+awk '{print $1}' <(grep -w "1289" <(cut -d$'\t' -f 1,5793-5879 ukb18177_glanville_phenotypes.txt)) > /data/SCZ_ids_self_reported_06_march.txt
+#self-reported - 620
+
+#HES/ICD
+cat <(awk '{print $1}' <(grep "F20" <(cut -d$'\t' -f 1,271-650,679-1113 /phenotypes.txt))) <(awk '{print $1}' <(grep -w "2953 | 2959" <(cut -d$'\t' -f 1,651-678,1114-1143 /phenotypes.txt))) > /data/SCZ_ids_HES_06_march.txt
+#ICD10 and ICD9 - 1350
+
+#MHQ self-report
+awk '{print $1}' <(grep -w "2" <(cut -d$'\t' -f 1,13039-13054 /phenotypes.txt)) > /data/SCZ_MHQ_11_march.txt
+wc -l /data/SCZ_MHQ_11_march.txt
+#158 cases
+
+# for depression: F32 and F33 for ICD 10, 3119 for ICD 9, and for self-report 1286 (not including post-natal depression)
+#awk out self-report
+awk '{print $1}' <(grep -w "1286" <(cut -d$'\t' -f 1,5793-5879 /phenotypes.txt)) > /data/DEPR_ids_self_reported_06_march.txt
+wc -l DEPR_ids_self_reported_06_march.txt
+#self-reported - 30116 cases
+
+#for ICD/HES
+cat <(awk '{print $1}' <(grep -E "F32|F33" <(cut -d$'\t' -f 1,271-650,679-1113 /phenotypes.txt))) <(awk '{print $1}' <(grep -w "3119" <(cut -d$'\t' -f 1,651-678,1114-1143 /phenotypes.txt))) > /data/DEPR_ids_HES_06_march.txt
+wc -l DEPR_ids_HES_06_march.txt
+#ICD10 and ICD9 - 14744 cases
+
+# now for MHQ
+awk '{print $1}' <(grep -w "11" <(cut -d$'\t' -f 1,13039-13054 /phenotypes.txt)) > /data/DEPR_MHQ_11_march.txt
+wc -l /data/DEPR_MHQ_11_march.txt
+
+
+#for ADHD
+#code is F90 in ICD10
+cat <(awk '{print $1}' <(grep -E "F90" <(cut -d$'\t' -f 1,271-650,679-1113 /phenotypes.txt)))> /data/ADHD_ids_HES_25_march.txt
+wc -l ADHD_ids_HES_25_march.txt
+#7 lines
+
+#code is 18 in MHQ
+awk '{print $1}' <(grep -w "18" <(cut -d$'\t' -f 1,13039-13054  /phenotypes.txt)) > /data/ADHD_MHQ_25_march.txt
+wc -l ADHD_MHQ_25_march.txt
+#133 lines
+
+
+
+#for bipolar disorder
+#code is F31 in ICD10, 
+cat <(awk '{print $1}' <(grep -E "F31" <(cut -d$'\t' -f 1,271-650,679-1113 /phenotypes.txt)))> /data/BIPO_ids_HES_25_march.txt
+wc -l BIPO_ids_HES_25_march.txt
+#1246 lines
+
+#code is 1291 in self-report,
+awk '{print $1}' <(grep -w "1291" <(cut -d$'\t' -f 1,5793-5879 /phenotypes.txt)) > /data/BIPO_ids_self_reported_06_march.txt
+wc -l BIPO_ids_self_reported_06_march.txt 
+#1434 lines
+
+#code is 10 in MHQ (mania, hypomania, bipolar or manic depression)
+awk '{print $1}' <(grep -w "10" <(cut -d$'\t' -f 1,13039-13054  /phenotypes.txt)) > /data/BIPO_MHQ_25_march.txt
+wc -l BIPO_MHQ_25_march.txt
+#838 lines
+
+
+#for cannabis use
+grep 20453 field_finder.txt  #column 12968
+awk '{print $1, $1, $12968}' /phenotypes.txt > /data/CANU_MHQ_IDS.txt
+wc CANU_MHQ_IDS.txt 
+
+#for alcohol dependence
+# 3039 in ICD 9, F10.2 in ICD10, 1408 in self-report, no MHQ
+cat <(awk '{print $1}' <(grep -w "F102" <(cut -d$'\t' -f 1,271-650,679-1113 /phenotypes.txt))) <(awk '{print $1}' <(grep -w "3039" <(cut -d$'\t' -f 1,651-678,1114-1143 /phenotypes.txt))) > /data/ALCD_ids_HES_26_march.txt
+wc -l ALCD_ids_HES_26_march.txt
+#2328 lines 
+
+awk '{print $1}' <(grep -w "1408" <(cut -d$'\t' -f 1,5793-5879 /phenotypes.txt)) > /ALCD_ids_self_reported_26_march.txt
+wc -l ALCD_ids_self_reported_26_march.txt
+#759 lines
+```
+
+Pulling in data for antipsychotic and antidepressant medications. 
+```{bash Pulling in data for medications, eval=F, echo=T}
+
+cut -d$'\t' -f 1,5880-6023 phenotypes.txt > /data/antipsychotics_05_march_2.txt
+
+
+#antipsychotics - the names were selected based on Mind's website and BNF directory
+grep -w -E "1140867944|1140909800|1140867078|1140867134|1140867168|1140867218|1140867304|1140867420|1140867444|1140868120|1140868170|1140879658|1140879746|1140882100|1140909802|1140910358|1140928916|1141152848|1141153490|1141195974|1140879750|1140882320|1141152860|1141167976|1141177762|1141202024|1140863416|1140867080|1140867092|1140867122|1140867136|1140867150|1140867152|1140867180|1140867184|1140867208|1140867210|1140867244|1140867272|1140867306|1140867342|1140867398|1140867456|1140867572|1140867940|1140867952|1140868172|1140909804|1141184742|1141185130|1141200458" antipsychotics_05_march_2.txt | awk '{print $1}'> antipsychotics_ID_06_march_updated.txt
+wc -l antipsychotics_ID_06_march_updated.txt
+#3339  lines
+
+
+#antidepressants - the names were selected based on Mind's website and BNF directory
+grep -w -E "1140867944|1140867624|1140867640|1140867690|1140867712|1140867726|1140867756|1140867758|1140867818|1140867820|1140867850|1140867852|1140867856|1140867860|1140867876|1140867878|1140867884|1140867888|1140867914|1140867916|1140867920|1140867922|1140867934|1140867938|1140867948|1140867960|1140879540|1140879556|1140879616|1140879620|1140879630|1140879634|1140882236|1140882244|1140909806|1140910504|1140910704|1140910820|1140916282|1140916288|1140921600|1141146062|1141151946|1141151978|1141151982|1141152732|1141152736|1141168396|1141174756|1141180212|1141190158|1141200564|1141201834" antipsychotics_05_march_2.txt | awk '{print $1}'> antidepressants_ID_06_march_updated.txt
+wc -l antidepressants_ID_06_march_updated.txt
+#37998 lines
+
+#update: added a few new lithium drugs for antidepressants
+grep -w -E "1199|1140867600|1140867618|1140867632|1140867944|1140867820|1140867850|1140867852|1140867856|1140867860|1140867876|1140867878|1140867884|1140867888|1140867914|1140867916|1140867920|1140867922|1140867934|1140867938|1140867948|1140867960|1140879540|1140879556|1140879616|1140879620|1140879630|1140879634|1140882236|1140882244|1140909806|1140910504|1140910704|1140910820|1140916282|1140916288|1140921600|1141146062|1141151946|1141151978|1141151982|1141152732|1141152736|1141168396|1141174756|1141180212|1141190158|1141200564|1141201834|1140909800|1140867078|1140867134|1140867168|1140867218|1140867304|1140867420|1140867444"  antipsychotics_05_march_2.txt | awk '{print $1}'> antidepressants_ID_25_march_updated.txt
+wc -l antidepressants_ID_25_march_updated.txt
+#39097 lines
+
+
+#ADHD_medications
+grep -w -E  "1140867944|1140867624|1140867640|1140867690|1140867712|1140867726|1140867756|1140867758|1140867818|1140867820" antipsychotics_05_march_2.txt | awk '{print $1}'> ADHD_medication_ID_25_march.txt
+wc -l ADHD_medication_ID_25_march.txt
+#1006 lines
+
+
+#bipolar disorder
+grep -w -E  "1140879746|1140928916|1141177762|1141202024|1140867136|1140867150|1140867152|1140867210|1140867398|1140867456|1199|1140867600|1140867618|1140867632|1140872160|1140872284|1140872290|1140872348|1140872360|1141172918|2038459704|1140867944|1140867820|1140867850|1140867852|1140867856|1140867860|1140867876|1140867878|1140867884|1140867888|1140867914|1140867916|1140867920|1140867922|1140867934|1140867938|1140867948|1140867960|1140879540|1140879556|1140879616|1140879620|1140879630|1140879634|1140882236|1140882244|1140909806|1140910504|1140910704|1140910820|1140916282|1140916288|1140921600|1141146062|1141151946|1141151978|1141151982|1141152732|1141152736|1141168396|1141174756|1141180212|1141190158|1141200564|1141201834|1140909800|1140867078|1140867134|1140867168|1140867218|1140867304|1140867420|1140867444" antipsychotics_05_march_2.txt | awk '{print $1}'> BIPO_medication_ID_25_march.txt
+wc -l BIPO_medication_ID_25_march.txt
+#40932 lines
+
+```
+
+# 2: Run PRS analyses
+## Single PRS binomial logistic regression
+```{r single PRS binomial logistic regression, eval=F, echo=T}
+library(data.table)
+library(fmsb)
+library(MASS)
+library(plyr)
+
+PRSnames=c("ADHD02_0.3","ADHD05_0.3","ALCD03_0.3",
+           "ANXI01_0.3","ANXI02_0.3","BIPO01_0.3",
+           "DEPR07_0.3","SCHI02_0.3","CANU01_0.3",
+           "SMOK03_0.3","ALCO01_0.3","COGN01_0.3",
+           "CONS01_0.3","EXTR01_0.3","NEUR04_0.3",
+           "AGAB01_0.3","AGGR01_0.3","ANTI01_0.3",
+           "HEIG01_0.3","WEIG01_0.3","HEIG03_0.3",
+           "OVER01_0.3","BODY02_0.3","BODY04_0.3")
+
+
+selfharmdata=fread("selfharm_small_15_Feb.txt",verbose=T)
+selfharmdata$batch[selfharmdata$batch==""]<-NA
+selfharmdata$AC<-as.factor(selfharmdata$assessment_centre)
+selfharmdata$sexL<-as.factor(selfharmdata$sex)
+selfharmdata$batchL<-as.factor(selfharmdata$batch)
+selfharmdata$f.20480.0.0[selfharmdata$f.20480.0.0==-818]<-NA
+selfharmdata$f.20483.0.0[selfharmdata$f.20483.0.0==-818]<-NA
+
+#try using glm!
+ResultsLoop=matrix(nrow = length(PRSnames),ncol=8)
+for (i in seq(from=1,to=length(PRSnames),by=1))
+{ selfharmdata$XD=NA;selfharmdata$XD=selfharmdata[,PRSnames[i],with=F] #with=F, refer to data.table FAQ 1.1
+fit1=glm(factor(f.20480.0.0)~scale(XD)+PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,family=binomial(link='logit'),data=selfharmdata)
+fit2=glm(factor(f.20480.0.0)~PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,family=binomial(link='logit'),data=selfharmdata)
+p1=coef(summary(fit1))[2,4]
+b1=coef(summary(fit1))[2,1]
+OR=exp(b1)
+CI=confint(fit1)
+LowCI=CI[2,1] #get  confidence intervals
+UpCI=CI[2,2]
+LowCI_OR=exp(LowCI)
+UpCI_OR=exp(UpCI)
+R1=NagelkerkeR2(fit1)$R2
+R2=NagelkerkeR2(fit2)$R2
+R2change=R1-R2
+Resultsglm=c(b1,LowCI,UpCI,OR, LowCI, UpCI, p1,R2change)
+ResultsLoop[i,1:8]=Resultsglm
+}
+save.image(file="glm_models.RData")
+
+# function to rename the columns for PRS
+pheno_names = function(var_names) {
+  pheno_renamed = revalue(var_names,
+                 c("ADHD02_0.3"="ADHD symptoms",
+                   "ADHD05_0.3"="ADHD",
+                   "AGAB01_0.3"="Agreeableness",
+                   "AGGR01_0.3"="Aggression",
+                   "ALCO01_0.3"="Daily alcohol use",
+                   "ALCD03_0.3"="Alcohol dependence disorder",
+                   "ANTI01_0.3"="Antisocial behaviour",
+                   "ANXI01_0.3"=
+                     "Anxiety disorders meta-analysis: factor scores",
+                   "ANXI02_0.3"=
+                     "Anxiety disorders meta-analysis: case-control",
+                   "BIPO01_0.3"="Bipolar disorder",
+                   "BODY02_0.3"="Extreme BMI",
+                   "BODY04_0.3"="BMI",
+                   "CANU01_0.3"="Lifetime cannabis use",
+                   "COGN01_0.3"="Education attainment",
+                   "CONS01_0.3"="Conscientiousness",
+                   "DEPR07_0.3"="MDD",
+                   "EXTR01_0.3"="Extraversion",
+                   "HEIG01_0.3"="Birth length",
+                   "HEIG03_0.3"="Adult height",
+                   "NEUR04_0.3"="Neuroticism IRT",
+                   "OVER01_0.3"="Overweight",
+                   "SCHI02_0.3"="Schizophrenia",
+                   "SMOK03_0.3"="Cigarettes per day",
+                   "WEIG01_0.3"="Birth weight"))
+  return(pheno_renamed)}
+
+colnames(ResultsLoop)=c("beta coefficient","Lower 95% CI", "Upper 95% CI", "Odds Ratio", "OR low 95% CI","OR up 95% CI","p-value","R2")
+
+PRSnames_renamed=pheno_names(PRSnames)
+rownames(ResultsLoop)=PRSnames_renamed
+
+ResultsLoop #compare with lrm results, especially the zero values!
+ResultsLoop=as.data.frame(ResultsLoop)
+number_models_all = length(ResultsLoop$`p-value`)
+ResultsLoop$pw_adjusted <- p.adjust(ResultsLoop$`p-value`, method = "fdr", n = number_models_all)
+ResultsLoop
+
+
+#output of results
+xlsx::write.xlsx(ResultsLoop, "glm_single_all_PRS_95CI_1206.xlsx")
+```
+
+## Mutiple PRS logistic regressions
+
+```{r mutiple PRS logistic regressions, eval=F, echo=T}
+multi2=glm(factor(f.20480.0.0) ~     
+             scale(ADHD05_0.3)+scale(ALCD03_0.3)+
+             scale(BIPO01_0.3)+scale(CANU01_0.3)+
+             scale(DEPR07_0.3)+scale(SCHI02_0.3)+
+             PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batch,
+             family=binomial(link='logit'),
+             data=selfharmdata)
+multi22=glm(factor(f.20480.0.0) ~ 
+              PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batch,
+              family=binomial(link='logit'),
+              data=selfharmdata)
+# calculate Nagelkerke's R2
+R11=NagelkerkeR2(multi2)$R2
+R22=NagelkerkeR2(multi22)$R2
+R2change2=R11-R22
+confint2=confint(multi2)
+# save as image for future reference
+save.image(file="multiple_PRS.RData")
+
+results2=cbind(coef(summary(multi2)),R2change2,confint2)
+results3=results2[1:7,c(1,6,7)]
+results2_OR=exp(results3)
+colnames(results2_OR)=c("OR","low_OR","up_OR")
+overall_results=cbind(results3,results2_OR)
+xlsx::write.xlsx(overall_results,"glm_multiple_all_PRS_95CI_1206.xlsx")
+
+
+```
+
+## Plot Figure 2
+
+R scripts to plot Figure 2 based on the results from the PRS analyses.
+
+```{r echo=T, eval=F,message=F}
+library(readxl)
+library(plyr)
+library(ggplot2)
+
+simple=read_excel("glm_single_all_PRS_95CI_1206.xlsx")
+multi=read_excel("glm_multiple_all_PRS_95CI_1206.xlsx")
+simple=as.data.frame(simple)
+multi=as.data.frame(multi)
+pheno_names = function(var_names) {
+  pheno_renamed = revalue(var_names, 
+                          c("ADHD02_0.3"="ADHD symptoms",
+                            "ADHD05_0.3"="ADHD",
+                            "AGAB01_0.3"="Agreeableness",
+                            "AGGR01_0.3"="Aggression",
+                            "ALCO01_0.3"="Daily alcohol use",
+                            "ALCD03_0.3"="Alcohol dependence disorder",
+                            "ANTI01_0.3"="Antisocial behaviour",
+                            "ANXI01_0.3"=
+                              "Anxiety disorders meta-analysis: factor scores",
+                            "ANXI02_0.3"=
+                              "Anxiety disorders meta-analysis: case-control",
+                            "BIPO01_0.3"="Bipolar disorder",
+                            "BODY02_0.3"="Extreme BMI",
+                            "BODY04_0.3"="BMI",
+                            "CANU01_0.3"="Lifetime cannabis use",
+                            "COGN01_0.3"="Education attainment",
+                            "CONS01_0.3"="Conscientiousness",
+                            "DEPR07_0.3"="MDD",
+                            "EXTR01_0.3"="Extraversion",
+                            "HEIG01_0.3"="Birth length",
+                            "HEIG03_0.3"="Adult height",
+                            "NEUR04_0.3"="Neuroticism IRT",
+                            "OVER01_0.3"="Overweight",
+                            "SCHI02_0.3"="Schizophrenia",
+                            "SMOK03_0.3"="Cigarettes per day",
+                            "WEIG01_0.3"="Birth weight"))
+  return(pheno_renamed)}
+
+##### PLOT ADJUSTED AND UNADJUSTED IN ONE MODEL
+multi$Group_multi="Multi" 
+simple$Group="Simple" 
+
+Simple_PRS = simple[,c("...1","Odds Ratio", "OR low 95% CI", "OR up 95% CI", "Group")]
+Multi_PRS  = multi[2:7,c("...1","OR", "low_OR", "up_OR", "Group_multi")]
+colnames(Simple_PRS)=c("Phenotype_names","OR", "lower_CI", "upper_CI", "Group")
+colnames(Multi_PRS)=c("Phenotype_names","OR", "lower_CI",  "upper_CI", "Group")
+
+allModelFrame <- data.frame(rbind(Simple_PRS, Multi_PRS)) 
+
+allModelFrame[25:30,1]=c("ADHD","Alcohol dependence disorder", "Bipolar disorder", "Lifetime cannabis use", "MDD","Schizophrenia")
+
+## Rename variables
+allModelFrame$Phenotype_names_renamed=allModelFrame$Phenotype_names
+Simple_PRS$Phenotype_names_renamed=Simple_PRS$Phenotype_names
+
+## order variables corresponding to the size of beta // convert to factor or numerical
+allModelFrame$OR_num=as.numeric(as.character(allModelFrame$OR))
+allModelFrame$Group_fac=as.factor(allModelFrame$Group)
+
+allModelFrame$Phenotype_names_ordered=
+  factor(allModelFrame$Phenotype_names, 
+         levels = Simple_PRS$Phenotype_names[order(allModelFrame$OR_num)])
+
+allModelFrame$Phenotype_names_renamed_ordered= 
+  factor(allModelFrame$Phenotype_names_renamed, 
+         levels = Simple_PRS$Phenotype_names_renamed[order(allModelFrame$OR_num)])
+
+allModelFrame$upper_CI_num=as.numeric(allModelFrame$upper_CI)
+allModelFrame$lower_CI_num=as.numeric(allModelFrame$lower_CI)
+# ## rename variables that are non-significant after FDR correction
+allModelFrame$Phenotype_names_renamed_ordered= revalue(allModelFrame$Phenotype_names_renamed_ordered, 
+      c("Alcohol dependence disorder" = "Alcohol dependence disorder (1)",
+        "ADHD symptoms"="ADHD symptoms (2)", 
+        "Neuroticism IRT"="Neuroticism IRT (2)",
+        "Antisocial behaviour"= "Antisocial behaviour (2)",
+        "Birth weight" = "Birth weight (2)",
+        "Extreme BMI" = "Extreme BMI (2)"))
+
+# ================= Plot results: FIGURE 2 ====================================================
+allModelFrame$Group_name[allModelFrame$Group=="Multi"]="Multiple PS regression"
+allModelFrame$Group_name[allModelFrame$Group=="Simple"]="Single PS regression"
+
+new_plot <- ggplot(allModelFrame, aes(shape= Group_name,col=Group_name)) +
+  scale_color_manual(values = c("seagreen", "deepskyblue2"))
+
+new_plot <- new_plot + 
+            geom_hline(yintercept = 1, 
+                       colour = gray(1/2), 
+                       lty = 2)
+
+new_plot <- new_plot + 
+            geom_linerange(aes(
+                     x = Phenotype_names_renamed_ordered, 
+                     ymin = lower_CI_num,
+                     ymax = upper_CI_num),
+                     lwd = 0.7, 
+                     position = position_dodge(width = 1/2))
+
+new_plot <- new_plot + 
+            geom_pointrange(aes(
+                      x = Phenotype_names_renamed_ordered, 
+                      y = OR_num, 
+                      ymin = lower_CI_num,
+                      ymax = upper_CI_num),
+                      lwd = 0.45, 
+                      position = position_dodge(width = 1/2))
+
+new_plot <- new_plot  +   
+            coord_flip() +
+            theme(legend.position = c(-0.75, 1),
+                  legend.justification = c(0, 0),
+                  legend.direction = "horizontal") +
+            labs(title = "", 
+                 x = "", 
+                 y = "OR", 
+                 color = c(""))  +   
+            scale_shape_discrete(name  ="")
+
+new_plot <- new_plot + labs(y="OR")
+
+new_plot <- new_plot + 
+            theme(axis.text.x = 
+                    element_text(size=9, 
+                                 family ="Times",
+                                 face="bold",
+                                 colour="black"),
+              
+                  axis.text.y = 
+                    element_text(size=9.5, 
+                                 family="Times",
+                                 face="bold", 
+                                 colour="black"), 
+                  axis.title  = 
+                    element_text(size=9, 
+                                 family="Times",
+                                 face="bold",
+                                 colour="black"), 
+                  legend.text = 
+                    element_text(size=9, 
+                                 family="Times",
+                                 face="bold",
+                                 colour="black"))
+
+```
+
+```{r eval=F,echo=T}
+# print the new plot
+new_plot
+#ggsave(file="Figure_2_20_Feb_2020.tiff", width=13, height=13, units="cm", dpi=550)
+```
+
+![Figure2](/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/Figure_2_20_Feb_2020.jpg)
+
+## Scripts to produce data for predict curve
+
+The results are shown in Table S3 and Table S4 in Supporting Information.
+
+```{r echo=T, eval=F}
+selfharmdata<-fread("selfharm_small_15_Feb.txt",verbose=T)
+selfharmdata$batch[selfharmdata$batch==""]<-NA
+selfharmdata$AC<-as.factor(selfharmdata$assessment_centre)
+selfharmdata$sexL<-as.factor(selfharmdata$sex)
+selfharmdata$batchL<-as.factor(selfharmdata$batch)
+selfharmdata$f.20480.0.0[selfharmdata$f.20480.0.0==-818]<-NA
+selfharmdata$f.20483.0.0[selfharmdata$f.20483.0.0==-818]<-NA
+
+table(selfharmdata$f.20480.0.0,useNA="always")
+table(selfharmdata$f.20483.0.0,useNA="always")
+
+
+
+PRS_merged<-selfharmdata[,c("f.20480.0.0","ADHD05_0.3","BIPO01_0.3",
+                            "CANU01_0.3","DEPR07_0.3","SCHI02_0.3",
+                            "PC1", "PC2", "PC3", "PC4", "PC5", "PC6", 
+                            "age", "sexL"),with=F]
+
+PRS_merged<-as.data.frame(PRS_merged)
+PRS_merged[,2:13]<-scale(PRS_merged[,2:13])
+PRS_merged_scaled<-PRS_merged
+PRS_merged_scaled$self_harm_dichotomized<-as.factor(PRS_merged$f.20480.0.0)
+
+
+
+multi<-glm(self_harm_dichotomized ~ 
+             DEPR07_0.3+ADHD05_0.3+BIPO01_0.3+CANU01_0.3+
+             SCHI02_0.3+PC1+PC2+PC3+PC4+PC5+PC6+age,
+             family=binomial(),
+             data=PRS_merged_scaled)
+
+multi_sex=glm(self_harm_dichotomized ~
+                DEPR07_0.3+ADHD05_0.3+BIPO01_0.3+CANU01_0.3+
+                SCHI02_0.3+PC1+PC2+PC3+PC4+PC5+PC6+age+sexL,
+                family=binomial(),
+                data=PRS_merged_scaled)
+
+# exclude sex, when do later, run the same model and include sex, when putting values into parameter, use sex =0 and sex = 1. #assessment centre, batch removed as well
+summary(multi)
+summary(multi_sex)
+
+## CREATE QUINTILE
+names_variables<-c("ADHD05_0.3","BIPO01_0.3","CANU01_0.3","DEPR07_0.3","SCHI02_0.3")
+#names_variables="DEPR07_0.3"
+n_loop<-length(names_variables)
+number_quantiles=5
+decile_matrix1<-PRS_merged_scaled[,2:6] #pick all variables that you have in the mode , inc PC1, just predictor 
+
+
+quantile<-as.data.frame(apply(decile_matrix1, 2, dplyr::ntile, n=number_quantiles))
+matrix_quantile<-matrix(ncol=n_loop, nrow=number_quantiles) #create empty matrix 
+colnames(matrix_quantile)<-names_variables
+
+###### 
+decile_matrix1<-as.data.frame(decile_matrix1)
+quantile<-as.data.frame(quantile)
+
+for (i in 1:n_loop) 
+  {matrix_quantile[1:5,i]<- tapply(decile_matrix1[,i],quantile[,i],mean)}
+
+colnames(matrix_quantile)<-names_variables
+
+dat_matrix_quantile<-as.data.frame(matrix_quantile)
+dat_matrix_quantile$PC1=0
+dat_matrix_quantile$PC2=0
+dat_matrix_quantile$PC3=0
+dat_matrix_quantile$PC4=0
+dat_matrix_quantile$PC5=0
+dat_matrix_quantile$PC6=0
+dat_matrix_quantile$age=0
+dat_matrix_quantile$quantile=c("D1","D2","D3","D4","D5")
+
+# write prediction_estimate function
+prediction_estimate = function(logistic_model, name_PGS, newdataD1, newdataD2, newdataD3, newdataD4, newdataD5) {
+  d1_predict=predict(logistic_model,newdataD1, type="response",se.fit=T)
+  d2_predict=predict(logistic_model,newdataD2, type="response",se.fit=T)
+  d3_predict=predict(logistic_model,newdataD3, type="response",se.fit=T)
+  d4_predict=predict(logistic_model,newdataD4, type="response",se.fit=T)
+  d5_predict=predict(logistic_model,newdataD5, type="response",se.fit=T)
+  
+  critval <- 1.96 ## approx 95% CI
+
+  d1_upr <- d1_predict$fit + (critval * d1_predict$se.fit)
+  d1_lwr <- d1_predict$fit - (critval * d1_predict$se.fit)
+  d1_fit <- d1_predict$fit
+  
+  d2_upr <- d2_predict$fit + (critval * d2_predict$se.fit)
+  d2_lwr <- d2_predict$fit - (critval * d2_predict$se.fit)
+  d2_fit <- d2_predict$fit
+
+  d3_upr <- d3_predict$fit + (critval * d3_predict$se.fit)
+  d3_lwr <- d3_predict$fit - (critval * d3_predict$se.fit)
+  d3_fit <- d3_predict$fit
+
+  d4_upr <- d4_predict$fit + (critval * d4_predict$se.fit)
+  d4_lwr <- d4_predict$fit - (critval * d4_predict$se.fit)
+  d4_fit <- d4_predict$fit
+
+  d5_upr <- d5_predict$fit + (critval * d5_predict$se.fit)
+  d5_lwr <- d5_predict$fit - (critval * d5_predict$se.fit)
+  d5_fit <- d5_predict$fit
+
+  upr=c(d1_upr,d2_upr,d3_upr,d4_upr,d5_upr)
+  lwr=c(d1_lwr,d2_lwr,d3_lwr,d4_lwr,d5_lwr)
+  pred=c(d1_fit,d2_fit,d3_fit,d4_fit,d5_fit)
+  pred_data_outcome=as.data.frame(rbind(d1_predict, 
+                                        d2_predict, 
+                                        d3_predict, 
+                                        d4_predict,
+                                        d5_predict))
+  pred_data_outcome$upr=upr*100
+  pred_data_outcome$lwr=lwr*100
+  pred_data_outcome$pred=pred*100
+
+  pred_data_outcome$quantile=c("D1", "D2", "D3", "D4", "D5")
+  pred_data_outcome$quantile_num=seq(1:5)
+  pred_data_outcome$Model=name_PGS
+  return(pred_data_outcome)
+}
+
+#data for combined PRS
+newdataD1=subset(dat_matrix_quantile, quantile=="D1")
+newdataD2=subset(dat_matrix_quantile, quantile=="D2")
+newdataD3=subset(dat_matrix_quantile, quantile=="D3")
+newdataD4=subset(dat_matrix_quantile, quantile=="D4")
+newdataD5=subset(dat_matrix_quantile, quantile=="D5")
+
+#data for ADHD
+D1_ADHD=newdataD1
+D2_ADHD=newdataD2
+D3_ADHD=newdataD3
+D4_ADHD=newdataD4
+D5_ADHD=newdataD5
+
+D1_ADHD[,]=0
+D2_ADHD[,]=0
+D3_ADHD[,]=0
+D4_ADHD[,]=0
+D5_ADHD[,]=0
+
+D1_ADHD$ADHD05_0.3=newdataD1$ADHD05_0.3
+D2_ADHD$ADHD05_0.3=newdataD2$ADHD05_0.3
+D3_ADHD$ADHD05_0.3=newdataD3$ADHD05_0.3
+D4_ADHD$ADHD05_0.3=newdataD4$ADHD05_0.3
+D5_ADHD$ADHD05_0.3=newdataD5$ADHD05_0.3
+
+#data for BIPO
+D1_BIPO=newdataD1
+D2_BIPO=newdataD2
+D3_BIPO=newdataD3
+D4_BIPO=newdataD4
+D5_BIPO=newdataD5
+
+D1_BIPO[,]=0
+D2_BIPO[,]=0
+D3_BIPO[,]=0
+D4_BIPO[,]=0
+D5_BIPO[,]=0
+
+D1_BIPO$BIPO01_0.3=newdataD1$BIPO01_0.3
+D2_BIPO$BIPO01_0.3=newdataD2$BIPO01_0.3
+D3_BIPO$BIPO01_0.3=newdataD3$BIPO01_0.3
+D4_BIPO$BIPO01_0.3=newdataD4$BIPO01_0.3
+D5_BIPO$BIPO01_0.3=newdataD5$BIPO01_0.3
+
+#data for CANU
+D1_CANU=newdataD1
+D2_CANU=newdataD2
+D3_CANU=newdataD3
+D4_CANU=newdataD4
+D5_CANU=newdataD5
+
+D1_CANU[,]=0
+D2_CANU[,]=0
+D3_CANU[,]=0
+D4_CANU[,]=0
+D5_CANU[,]=0
+
+D1_CANU$CANU01_0.3=newdataD1$CANU01_0.3
+D2_CANU$CANU01_0.3=newdataD2$CANU01_0.3
+D3_CANU$CANU01_0.3=newdataD3$CANU01_0.3
+D4_CANU$CANU01_0.3=newdataD4$CANU01_0.3
+D5_CANU$CANU01_0.3=newdataD5$CANU01_0.3
+
+#data for DEPR
+D1_DEPR=newdataD1
+D2_DEPR=newdataD2
+D3_DEPR=newdataD3
+D4_DEPR=newdataD4
+D5_DEPR=newdataD5
+
+D1_DEPR[,]=0
+D2_DEPR[,]=0
+D3_DEPR[,]=0
+D4_DEPR[,]=0
+D5_DEPR[,]=0
+
+D1_DEPR$DEPR07_0.3=newdataD1$DEPR07_0.3
+D2_DEPR$DEPR07_0.3=newdataD2$DEPR07_0.3
+D3_DEPR$DEPR07_0.3=newdataD3$DEPR07_0.3
+D4_DEPR$DEPR07_0.3=newdataD4$DEPR07_0.3
+D5_DEPR$DEPR07_0.3=newdataD5$DEPR07_0.3
+
+#data for SCHI
+D1_SCHI=newdataD1
+D2_SCHI=newdataD2
+D3_SCHI=newdataD3
+D4_SCHI=newdataD4
+D5_SCHI=newdataD5
+
+D1_SCHI[,]=0
+D2_SCHI[,]=0
+D3_SCHI[,]=0
+D4_SCHI[,]=0
+D5_SCHI[,]=0
+
+D1_SCHI$SCHI02_0.3=newdataD1$SCHI02_0.3
+D2_SCHI$SCHI02_0.3=newdataD2$SCHI02_0.3
+D3_SCHI$SCHI02_0.3=newdataD3$SCHI02_0.3
+D4_SCHI$SCHI02_0.3=newdataD4$SCHI02_0.3
+D5_SCHI$SCHI02_0.3=newdataD5$SCHI02_0.3
+
+
+
+
+#run the prediction model function
+predicted_all=prediction_estimate(multi,"combined PGS",
+                                  newdataD1,newdataD2,newdataD3,newdataD4,newdataD5)
+
+predicted_ADHD=prediction_estimate(multi,"ADHD",D1_ADHD,D2_ADHD,D3_ADHD,D4_ADHD,D5_ADHD)
+predicted_BIPO=prediction_estimate(multi,"BIPO",D1_BIPO,D2_BIPO,D3_BIPO,D4_BIPO,D5_BIPO)
+predicted_CANU=prediction_estimate(multi,"CANU",D1_CANU,D2_CANU,D3_CANU,D4_CANU,D5_CANU)
+predicted_DEPR=prediction_estimate(multi,"DEPR",D1_DEPR,D2_DEPR,D3_DEPR,D4_DEPR,D5_DEPR)
+predicted_SCHI=prediction_estimate(multi,"SCHI",D1_SCHI,D2_SCHI,D3_SCHI,D4_SCHI,D5_SCHI)
+
+
+#this is what you got today (31st July, 2019). Wohoo well done Kai Xiang, you are so amazing!!!
+data_for_graph=rbind(predicted_all,
+                     predicted_ADHD,
+                     predicted_BIPO,
+                     predicted_CANU,
+                     predicted_DEPR,
+                     predicted_SCHI)
+data_for_graph=as.data.frame(data_for_graph)
+(data_for_graph2=unlist(data_for_graph))
+fwrite(data_for_graph, file="data_for_predict_curve_17_Feb_2020.csv")
+```
+
+## Plot Figure 3
+```{r echo=T, eval=F}
+library(ggplot2)
+library(data.table)
+data_for_graph=fread("data_for_predict_curve_17_Feb_2020.csv")
+
+
+cbPalette <- c("#5BC0EB","#FDE74C","#9BC53D","#E55934","#FA7921","#295D2E")
+
+bp = ggplot(data_for_graph, aes(x = quantile_num, 
+                                y = pred, 
+                                shape=factor(Model, 
+                                             labels=c("ADHD", 
+                                                      "Bipolar disorder", 
+                                                      "Lifetime cannabis use", 
+                                                      "Combined PS", 
+                                                      "MDD",
+                                                      "Schizophrenia")),
+                                color=factor(Model, 
+                                             labels=c("ADHD", 
+                                                      "Bipolar disorder", 
+                                                      "Lifetime cannabis use", 
+                                                      "Combined PS",
+                                                      "MDD", 
+                                                      "Schizophrenia"))))+
+  scale_colour_manual(values=cbPalette)+
+  geom_line(linetype = "solid", 
+            size=1) +
+  geom_point(size=3.0)+
+  scale_x_discrete(name ="Mean polygenic score per quintile", 
+                   limits=c("Mean PS (Q1)","Mean PS (Q2)",
+                            "Mean PS (Q3)", "Mean PS (Q4)", 
+                            "Mean PS (Q5)")) +
+  theme(legend.position="top", 
+        legend.title = element_blank(),
+        legend.text=element_text(size=15))+
+  scale_y_continuous(name="Predicted risk (%) of self-harm", 
+                     limits=c(0, 7))
+
+
+bp=bp + theme(axis.title.x = element_text(face="bold", 
+                                          size=11,
+                                          family ="Times",
+                                          colour="black"),
+              axis.text.x  = element_text(vjust=0.5, 
+                                          size=9,
+                                          family ="Times",
+                                          colour="black"),
+              axis.text.y  = element_text(vjust=0.5, 
+                                          size=10,
+                                          family ="Times",
+                                          colour="black"),
+              axis.title.y = element_text(face="bold", 
+                                          size=11,
+                                          family ="Times",
+                                          colour="black"),
+              legend.text = element_text(size=10, 
+                                         face="bold",
+                                         family="Times",
+                                         colour="black"))
+
+bp
+```
+
+![Figure3](/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/Figure_3_20_Feb_2020.jpg)
+
+
+```{r eval=F}
+ggsave("Figure_3_20_Feb_2020.tiff",width=13, height=13, units="cm", dpi=550)  
+```
+
+## PRS analyses excluding SCHI cases
+``` {r echo=T, eval=F}
+# 11 March 2019
+#as suggested by JB, run another PRS which excludes schiophrenia cases and see if the results are significant
+scz=fread("scz_diagnosis_0706.txt",verbose=T)
+scz_data=as.data.frame(scz)
+
+
+selfharm_exclude_schi=selfharmdata[!selfharmdata$IID %in% scz_data$IID,]
+dim(selfharmdata);dim(scz_data);dim(selfharm_exclude_schi)
+#502676-1121=501555
+
+#run PRS analysis without SCHI cases:
+fit1=glm(factor(f.20480.0.0)~
+           scale(SCHI02_0.3)+PC1+PC2+PC3+PC4+PC5+PC6+
+           age+sexL+AC+batchL,
+           family=binomial(link='logit'),
+           data=selfharm_exclude_schi)
+
+fit2=glm(factor(f.20480.0.0)~
+           PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,
+           family=binomial(link='logit'),
+            data=selfharm_exclude_schi)
+
+p1=coef(summary(fit1))[2,4] 
+b1=coef(summary(fit1))[2,1]
+CI=confint(fit1)
+LowCI=CI[2,1] #get upper confidence intervals
+UpCI=CI[2,2]
+R1=NagelkerkeR2(fit1)$R2
+R2=NagelkerkeR2(fit2)$R2
+R2change=R1-R2
+OR=exp(b1)
+ORlowCI=exp(LowCI)
+ORupCI=exp(UpCI)
+Resultsglm=c(b1,LowCI,UpCI,OR, ORlowCI, ORupCI, p1,R2change)
+
+
+ResultsLoop=matrix(nrow = 1,ncol=8)
+ResultsLoop[1,1:7]<-Resultsglm
+colnames(ResultsLoop)=c("beta coefficient","lowCI" "upCI","OR","ORlowCI","ORupCI","p-value","R2")
+ResultsLoop
+write.table(ResultsLoop,"SCZ_excluded_GLM_0107_OR.csv")
+```
+
+## PRS analyses excluding MDD cases
+```{r echo=T, eval=F}
+# exclude DEPR cases 
+dep=fread("dep_diagnosis_0706.txt",verbose=T)
+head(dep);dim(dep)
+    
+selfharm_exclude_depr=selfharmdata[!selfharmdata$IID %in% dep$IID,]
+dim(selfharmdata);dim(dep);dim(selfharm_exclude_depr)
+#502676-62645=440031
+
+str(selfharm_exclude_depr)
+#run PRS analysis without SCHI cases:
+fit1=glm(factor(f.20480.0.0)~
+           scale(DEPR07_0.3)+PC1+PC2+PC3+PC4+PC5+PC6+
+           age+sexL+AC+batchL,
+           family=binomial(link='logit'),
+           data=selfharm_exclude_depr)
+
+fit2=glm(factor(f.20480.0.0)~
+           PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,
+           family=binomial(link='logit'),
+           data=selfharm_exclude_depr)
+
+p1=coef(summary(fit1))[2,4] 
+b1=coef(summary(fit1))[2,1]
+CI=confint(fit1)
+LowCI=CI[2,1] #get upper confidence intervals
+UpCI=CI[2,2]
+R1=NagelkerkeR2(fit1)$R2
+R2=NagelkerkeR2(fit2)$R2
+R2change=R1-R2
+OR=exp(b1)
+ORlowCI=exp(LowCI)
+ORupCI=exp(UpCI)
+Resultsglm=c(b1,LowCI,UpCI,OR, ORlowCI, ORupCI, p1,R2change)
+
+
+ResultsLoop=matrix(nrow = 1,ncol=8)
+ResultsLoop[1,1:7]<-Resultsglm
+colnames(ResultsLoop)=c("beta coefficient","lowCI" "upCI","OR","ORlowCI","ORupCI","p-value","R2")
+ResultsLoop
+write.table(ResultsLoop,"DEP_excluded_GLM_0107_OR.csv")
+```
+
+## Multinomial PRS regression
+```{r echo=T, eval=F}
+
+#read self-harm data
+#install.packages("data.table")
+library(data.table)
+library(AER)
+library(nnet)
+library(rms)
+library(DescTools) #to calculate NagelkerkeR2 for multinom (nnet)
+library(fmsb)
+library(MASS) #to calculate NagelkerkeR2 for glm
+selfharmdata=fread("selfharm_small_15_Feb.txt", verbose=T)
+selfharmdata$batch[selfharmdata$batch==""]<-NA
+selfharmdata$AC<-as.factor(selfharmdata$assessment_centre)
+selfharmdata$sexL<-as.factor(selfharmdata$sex)
+selfharmdata$batchL<-as.factor(selfharmdata$batch)
+selfharmdata$f.20480.0.0[selfharmdata$f.20480.0.0==-818]<-NA
+selfharmdata$f.20483.0.0[selfharmdata$f.20483.0.0==-818]<-NA
+str(selfharmdata$AC);str(selfharmdata$sexL);str(selfharmdata$batchL)
+table(selfharmdata$batch,useNA="always")
+table(selfharmdata$AC,useNA="always")
+#run the analysis only for PRS significant at p=0.05 threshold after FDR
+PRS=c("ADHD02_0.3","ADHD05_0.3","ALCD03_0.3",
+      "ANXI01_0.3","ANXI02_0.3","BIPO01_0.3",
+      "DEPR07_0.3","SCHI02_0.3","CANU01_0.3",
+      "SMOK03_0.3","ALCO01_0.3","COGN01_0.3",
+      "CONS01_0.3","EXTR01_0.3","NEUR04_0.3",
+      "AGAB01_0.3","AGGR01_0.3","ANTI01_0.3",
+      "HEIG01_0.3","WEIG01_0.3","HEIG03_0.3",
+      "OVER01_0.3","BODY02_0.3","BODY04_0.3")
+
+#create a new column with 0,1 and 2, 0 for never self-harmed, 1 for ever self-harm without suicide intention 
+#and 2 for self harm with suicide intention.  
+
+selfharmdata$SHI=NA;selfharmdata$SHI=selfharmdata$f.20483.0.0
+head(selfharmdata$SHI, 100)
+
+table(selfharmdata$f.20483.0.0, useNA="always")
+table(selfharmdata$f.20480.0.0, useNA="always")
+
+#recode to delineate never self-harmed (0), NSSH (1) and SSH (2).
+selfharmdata[which(selfharmdata$f.20480.0.0==0),"SHI"] <- 0
+selfharmdata[which(selfharmdata$f.20483.0.0==0),"SHI"] <- 1
+selfharmdata[which(selfharmdata$f.20483.0.0==1),"SHI"] <- 2
+table(selfharmdata$SHI,useNA="always")
+
+#run multinomial logistic regression
+ selfharmdata$SHI<-factor(selfharmdata$SHI)
+ selfharmdata$SHI<- relevel(selfharmdata$SHI, ref = "0")
+
+ ResultsLoop=matrix(nrow = length(PRS),ncol=16)
+ for (i in seq(from=1,to=length(PRS),by=1))
+  { selfharmdata$XA=NA;selfharmdata$XA=selfharmdata[,PRS[i],with=F]
+ selfharmdata$XD=NA; selfharmdata$XD=scale(selfharmdata$XA)
+ model1=multinom(SHI ~ XD+PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,data=selfharmdata)
+ model2=multinom(SHI ~ PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,data=selfharmdata)
+ sumtest1=summary(model1)
+ sumtest2=summary(model2)
+ CI=confint(model1, parm="XD")
+ b1=sumtest1$coefficients[3]
+ b2=sumtest1$coefficients[4]
+lowCI1=CI[1]
+upCI1=CI[2]
+lowCI2=CI[3]
+upCI2=CI[4]
+OR1=exp(b1);OR2=exp(b2)
+ORlowCI1=exp(lowCI1);ORupCI1=exp(upCI1)
+ORlowCI2=exp(lowCI2);ORupCI2=exp(upCI2)
+ a=anova(model1,model2)[7]
+ p.anova=a$Pr[2]
+ z <- sumtest1$coefficients/sumtest1$standard.errors
+ # 2-tailed z test
+ p <- (1 - pnorm(abs(z), 0, 1)) * 2  
+ p1=p[3]
+ p2=p[4]
+ R1=PseudoR2(model1,which="Nagelkerke")
+ R2=PseudoR2(model2,which="Nagelkerke")
+ Rchange=R1-R2
+ Results=c(b1,lowCI1,upCI1,OR1,ORlowCI1,ORupCI1,p1,
+           b2,lowCI2,upCI2,OR2,ORlowCI2,ORupCI2,p2,
+           Rchange,p.anova) #remember to add SEs
+ Results
+ 
+#
+# #when ref=0 
+# #1.274361e-01 1.198635e-01 4.808891e-10 4.379186e-10 0.000000e+00
+# #when ref=1
+# 
+ ResultsLoop[i,1:16]=Results
+# 
+ }
+# 
+ colnames(ResultsLoop)=c("beta.1","lowCI.1","upCI.1","OR.1","lowOR.1","upOR.1","p.value1",
+                         "beta.2","lowCI.2","upCI.2","OR.2","lowOR.2","upOR.2","p.value2","R2","p.anova")
+ rownames(ResultsLoop)=PRS
+# 
+ResultsLoop
+
+ ResultsLoop=as.data.frame(ResultsLoop)
+ number_models_all = length(cbind(ResultsLoop$p.value1,ResultsLoop$p.value2))
+ ResultsLoop$p1_adjusted <- p.adjust(ResultsLoop$`p.value1`, method = "fdr", n = number_models_all)
+ ResultsLoop$p2_adjusted <- p.adjust(ResultsLoop$`p.value2`, method = "fdr", n = number_models_all)
+ setwd("/mnt/lustre/groups/ukbiobank/Edinburgh_Data/usr/Kai/publication_analyses/results")
+ write.csv(ResultsLoop, "multinom_FDR_0307.csv")
+
+
+###now run another multinomial model with different reference group - NSSH as reference
+selfharmdata$SHI<-factor(selfharmdata$SHI)
+selfharmdata$SHI<- relevel(selfharmdata$SHI, ref = "1")
+
+ ResultsLoop2=matrix(nrow = length(PRS),ncol=16)
+ for (i in seq(from=1,to=length(PRS),by=1))
+  { selfharmdata$XA=NA;selfharmdata$XA=selfharmdata[,PRS[i],with=F]
+ selfharmdata$XD=NA; selfharmdata$XD=scale(selfharmdata$XA)
+ model1=multinom(SHI ~ XD+PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,data=selfharmdata)
+ model2=multinom(SHI ~ PC1+PC2+PC3+PC4+PC5+PC6+age+sexL+AC+batchL,data=selfharmdata)
+ sumtest1=summary(model1)
+ sumtest2=summary(model2)
+
+ CI2=confint(model1, parm="XD")
+ b1=sumtest1$coefficients[3]
+ b2=sumtest1$coefficients[4]
+lowCI1=CI2[1]
+upCI1=CI2[2]
+lowCI2=CI2[3]
+upCI2=CI2[4]
+OR1=exp(b1);OR2=exp(b2)
+ORlowCI1=exp(lowCI1);ORupCI1=exp(upCI1)
+ORlowCI2=exp(lowCI2);ORupCI2=exp(upCI2)
+ a=anova(model1,model2)[7]
+ p.anova=a$Pr[2]
+ z <- sumtest1$coefficients/sumtest1$standard.errors
+ # 2-tailed z test
+ p <- (1 - pnorm(abs(z), 0, 1)) * 2  #for depression, the p-value was 0 for SSH,not desirable.
+ p1=p[3]
+ p2=p[4]
+ #try using another package to obtain p-value
+ pp<-coeftest(model1) #obtain p-value
+ pp #shows that p=0  means p< 2.2e-16
+#
+ R1=PseudoR2(model1,which="Nagelkerke")
+ R2=PseudoR2(model2,which="Nagelkerke")
+ Rchange=R1-R2
+ Results=c(b1,lowCI1,upCI1,OR1,ORlowCI1,ORupCI1,p1,
+           b2,lowCI2,upCI2,OR2,ORlowCI2,ORupCI2,p2,
+           Rchange,p.anova) #remember to add SEs
+ ResultsLoop[i,1:16]=Results
+ }
+ colnames(ResultsLoop)=c("beta.1","lowCI.1","upCI.1",
+                         "OR.1","lowOR.1","upOR.1","p.value1",
+                         "beta.2","lowCI.2","upCI.2",
+                         "OR.2","lowOR.2","upOR.2","p.value2",
+                         "R2","p.anova")
+ rownames(ResultsLoop)=PRS
+
+ ResultsLoop=as.data.frame(ResultsLoop)
+ number_models_all = length(cbind(ResultsLoop$p.value1,ResultsLoop$p.value2))
+ ResultsLoop$p1_adjusted <- p.adjust(ResultsLoop$`p.value1`, method = "fdr", n = number_models_all)
+ ResultsLoop$p2_adjusted <- p.adjust(ResultsLoop$`p.value2`, method = "fdr", n = number_models_all)
+ write.csv(ResultsLoop, "NSSH_multinom_FDR_0307.csv")
+```
+
+# 3: Run MR
+## Univariate two-sample MR
+### Outcome: SH
+```{r univariate MR , eval=F, echo=T}
+library(TwoSampleMR)
+library(MendelianRandomization)
+library(mr.raps)
+library(data.table)
+library(xlsx)
+
+
+#                           1.  read all exposure data   
+# ADHD
+exposure_ADHD_dat <- read_exposure_data(
+  filename = "ADHD", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value           
+exposure_ADHD_dat$exposure="ADHD" # Provide a name for the exposure variable
+length(exposure_ADHD_dat$SNP) # We can check the number of rows the imported dataset
+
+# ALCD
+exposure_ALCD_dat <- read_exposure_data(
+  filename = "ALCD", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value           
+exposure_ALCD_dat$exposure="ALCD" # Provide a name for the exposure variable
+length(exposure_ALCD_dat$SNP) # We can check the number of rows the imported dataset
+
+exposure_BIPO_dat <- read_exposure_data(
+  filename = "BIPO", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value
+
+exposure_BIPO_dat$exposure="BIPO" # Provide a name for the exposure variable
+length(exposure_BIPO_dat$SNP) # We can check the number of rows the imported dataset 
+exposure_CANU_dat <- read_exposure_data(
+  filename = "CANU", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "BETA",         # Insert the name of column with effect sizes
+  se_col = "SE",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",            # Insert the name of column with p-value
+  eaf_col="FREQ")            # Insert the name of column with effect allele frequency
+exposure_CANU_dat$exposure="CANU" # Provide a name for the exposure variable
+length(exposure_CANU_dat$SNP) # We can check the number of rows the imported dataset
+
+
+exposure_DEPR_dat <- read_exposure_data(
+  filename = "DEPR", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",            # Insert the name of column with p-value
+  eaf_col="FREQ")            # Insert the name of column with effect allele frequency
+exposure_DEPR_dat$exposure="DEPR"
+length(exposure_DEPR_dat$SNP) # We can check the number of rows the imported dataset
+
+schi=fread("SCHI") #SCHI file is too big, hence use fread to read it first, then
+                   # remove snps which are not needed.   
+schi2=subset(schi,P<0.05)
+
+exposure_SCHI_dat<-format_data(schi2, 
+                               type="exposure",
+                               snp_col = "SNP",          
+                               beta_col = "beta",        
+                               se_col = "beta_se",        
+                               effect_allele_col = "A1",  
+                               other_allele_col = "A2",  
+                               pval_col = "P",            
+                               eaf_col="FREQ")
+
+
+exposure_SCHI_dat$exposure="SCHI" # Provide a name for the exposure variable
+length(exposure_SCHI_dat$SNP) # We can check the number of rows the imported dataset 
+
+
+# now read outcome data - self-harm
+outcome_SH_dat <- read_outcome_data(
+  snps = NULL,                            # Keep 'snps=NULL' so that all SNPs are uploaded
+  filename = "selfharm_sumstats_v2",    
+  sep = "\t",                           
+  snp_col = "rsid",                       
+  beta_col = "beta",                     
+  se_col = "se",                          
+  effect_allele_col = "alt",   
+  other_allele_col = "ref",      
+  pval_col = "pval",                         
+  eaf_col="AF")    
+
+outcome_SH_dat$outcome <- "SH" # Provide a name for the outcome  
+length(outcome_SH_dat$SNP) 
+
+#quality control: select p-value for the snps associated with adhd at 0.3 - does not work - too many SNPs!
+#use 5e5 instead - 5e8 was too stringent. 
+exposure_ADHD_dat_5e5=subset(exposure_ADHD_dat, pval.exposure < 5e-5)
+exposure_ALCD_dat_5e5=subset(exposure_ALCD_dat, pval.exposure < 5e-5)
+exposure_BIPO_dat_5e5=subset(exposure_BIPO_dat, pval.exposure < 5e-5)
+exposure_CANU_dat_5e5=subset(exposure_CANU_dat, pval.exposure < 5e-5)
+exposure_DEPR_dat_5e5=subset(exposure_DEPR_dat, pval.exposure < 5e-5)
+exposure_SCHI_dat_5e5=subset(exposure_SCHI_dat, pval.exposure < 5e-5)
+
+#clumping, note that clump_kb is not the same as default in updated package!
+exposure_ADHD_dat_5e5_clumped=clump_data(exposure_ADHD_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_ALCD_dat_5e5_clumped=clump_data(exposure_ALCD_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_BIPO_dat_5e5_clumped=clump_data(exposure_BIPO_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_CANU_dat_5e5_clumped=clump_data(exposure_CANU_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_DEPR_dat_5e5_clumped=clump_data(exposure_DEPR_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_SCHI_dat_5e5_clumped=clump_data(exposure_SCHI_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+#number of SNPs passing 5e-5 threshold
+print("ADHD: ");length(exposure_ADHD_dat_5e5$SNP)
+print("ALCD: ");length(exposure_ALCD_dat_5e5$SNP)
+print("BIPO: ");length(exposure_BIPO_dat_5e5$SNP)
+print("CANU: ");length(exposure_CANU_dat_5e5$SNP)
+print("DEPR: ");length(exposure_DEPR_dat_5e5$SNP)
+print("SCHI: ");length(exposure_SCHI_dat_5e5$SNP)
+
+# 5e5 clumping results
+print("ADHD: ");length(exposure_ADHD_dat_5e5_clumped$SNP)
+print("ALCD: ");length(exposure_ALCD_dat_5e5_clumped$SNP)
+print("BIPO: ");length(exposure_BIPO_dat_5e5_clumped$SNP)
+print("CANU: ");length(exposure_CANU_dat_5e5_clumped$SNP)
+print("DEPR: ");length(exposure_DEPR_dat_5e5_clumped$SNP)
+print("SCHI: ");length(exposure_SCHI_dat_5e5_clumped$SNP)
+
+
+#choose p=5e-5 threshold and harmonise data
+DataMR_ADHDtoSH <- harmonise_data(exposure_dat = exposure_ADHD_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+DataMR_ALCDtoSH <- harmonise_data(exposure_dat = exposure_ALCD_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+DataMR_BIPOtoSH <- harmonise_data(exposure_dat = exposure_BIPO_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+DataMR_CANUtoSH <- harmonise_data(exposure_dat = exposure_CANU_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+DataMR_DEPRtoSH <- harmonise_data(exposure_dat = exposure_DEPR_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+DataMR_SCHItoSH <- harmonise_data(exposure_dat = exposure_SCHI_dat_5e5_clumped, 
+                                  outcome_dat = outcome_SH_dat, 
+                                  action=2)
+
+
+DataMR_ADHDtoSH_keep=subset(DataMR_ADHDtoSH, mr_keep==TRUE)
+DataMR_ALCDtoSH_keep=subset(DataMR_ALCDtoSH, mr_keep==TRUE)
+DataMR_BIPOtoSH_keep=subset(DataMR_BIPOtoSH, mr_keep==TRUE)
+DataMR_CANUtoSH_keep=subset(DataMR_CANUtoSH, mr_keep==TRUE)
+DataMR_DEPRtoSH_keep=subset(DataMR_DEPRtoSH, mr_keep==TRUE)
+DataMR_SCHItoSH_keep=subset(DataMR_SCHItoSH, mr_keep==TRUE)
+
+#use MendelianRandomization to calculate the MR estimates
+detach(package:TwoSampleMR)
+library(MendelianRandomization)
+
+bx1 = DataMR_ADHDtoSH_keep$beta.exposure
+bxse1 = DataMR_ADHDtoSH_keep$se.exposure
+by1 = DataMR_ADHDtoSH_keep$beta.outcome
+byse1 = DataMR_ADHDtoSH_keep$se.outcome
+
+bx22 = DataMR_ALCDtoSH_keep$beta.exposure
+bxse22 = DataMR_ALCDtoSH_keep$se.exposure
+by22 = DataMR_ALCDtoSH_keep$beta.outcome
+byse22 = DataMR_ALCDtoSH_keep$se.outcome
+
+bx2 = DataMR_BIPOtoSH_keep$beta.exposure
+bxse2 = DataMR_BIPOtoSH_keep$se.exposure
+by2 = DataMR_BIPOtoSH_keep$beta.outcome
+byse2 = DataMR_BIPOtoSH_keep$se.outcome
+
+bx3 = DataMR_CANUtoSH_keep$beta.exposure
+bxse3 = DataMR_CANUtoSH_keep$se.exposure
+by3 = DataMR_CANUtoSH_keep$beta.outcome
+byse3 = DataMR_CANUtoSH_keep$se.outcome
+
+bx5 = DataMR_DEPRtoSH_keep$beta.exposure
+bxse5 = DataMR_DEPRtoSH_keep$se.exposure
+by5 = DataMR_DEPRtoSH_keep$beta.outcome
+byse5 = DataMR_DEPRtoSH_keep$se.outcome
+
+bx6 = DataMR_SCHItoSH_keep$beta.exposure
+bxse6 = DataMR_SCHItoSH_keep$se.exposure
+by6 = DataMR_SCHItoSH_keep$beta.outcome
+byse6 = DataMR_SCHItoSH_keep$se.outcome
+
+# Read in the data
+MR_ADHDtoSH_data <- mr_input(bx1, bxse1, by1, byse1, exposure="ADHD", outcome="SH")
+MR_ALCDtoSH_data <- mr_input(bx22, bxse22, by22, byse22, exposure="ALCD", outcome="SH")
+MR_BIPOtoSH_data <- mr_input(bx2, bxse2, by2, byse2, exposure="BIPO", outcome="SH")
+MR_CANUtoSH_data <- mr_input(bx3, bxse3, by3, byse3, exposure="CANU", outcome="SH")
+MR_DEPRtoSH_data <- mr_input(bx5, bxse5, by5, byse5, exposure="DEPR", outcome="SH")
+MR_SCHItoSH_data <- mr_input(bx6, bxse6, by6, byse6, exposure="SCHI", outcome="SH")
+
+# Run MR
+MR_ADHDtoSH <- mr_allmethods(MR_ADHDtoSH_data, method = "all")
+MR_ALCDtoSH <- mr_allmethods(MR_ALCDtoSH_data, method = "all")
+MR_BIPOtoSH <- mr_allmethods(MR_BIPOtoSH_data, method = "all")
+MR_CANUtoSH <- mr_allmethods(MR_CANUtoSH_data, method = "all")
+MR_DEPRtoSH <- mr_allmethods(MR_DEPRtoSH_data, method = "all")
+MR_SCHItoSH <- mr_allmethods(MR_SCHItoSH_data, method = "all")
+
+Results_ADHDtoSH=MR_ADHDtoSH@Values # Saves the results in dataframe
+Results_ALCDtoSH=MR_ALCDtoSH@Values 
+Results_BIPOtoSH=MR_BIPOtoSH@Values 
+Results_CANUtoSH=MR_CANUtoSH@Values 
+Results_DEPRtoSH=MR_DEPRtoSH@Values 
+Results_SCHItoSH=MR_SCHItoSH@Values 
+
+mrfilename<-"MendelianRandomization_results_1005.xlsx"
+write.xlsx(Results_ADHDtoSH, file=mrfilename, sheetName="ADHD")
+write.xlsx(Results_ALCDtoSH, file=mrfilename, sheetName="ALCD", append=T)
+write.xlsx(Results_BIPOtoSH, file=mrfilename, sheetName="BIPO", append=T)
+write.xlsx(Results_CANUtoSH, file=mrfilename, sheetName="CANU", append=T)
+write.xlsx(Results_DEPRtoSH, file=mrfilename, sheetName="DEPR", append=T)
+write.xlsx(Results_SCHItoSH, file=mrfilename, sheetName="SCHI", append=T)
+
+#run MR egger using MendelianRandomisation package
+mr_egger(MR_ADHDtoSH_data)
+mr_egger(MR_ALCDtoSH_data)
+mr_egger(MR_BIPOtoSH_data)
+mr_egger(MR_CANUtoSH_data)
+mr_egger(MR_DEPRtoSH_data)
+mr_egger(MR_SCHItoSH_data)
+
+#use TwoSampleMR to calculate the MR estimates
+library(TwoSampleMR)
+MR_ADHDtoSH2<- mr(DataMR_ADHDtoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+MR_ALCDtoSH2<- mr(DataMR_ALCDtoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+MR_BIPOtoSH2<- mr(DataMR_BIPOtoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+MR_CANUtoSH2<- mr(DataMR_CANUtoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+MR_DEPRtoSH2<- mr(DataMR_DEPRtoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+MR_SCHItoSH2<- mr(DataMR_SCHItoSH,method_list=c("mr_raps", 
+                                                "mr_weighted_median", 
+                                                "mr_ivw", 
+                                                "mr_egger_regression"))
+
+Results_ADHDtoSH2=MR_ADHDtoSH2 # Saves the results in dataframe
+Results_ALCDtoSH2=MR_ALCDtoSH2 # Saves the results in dataframe
+Results_BIPOtoSH2=MR_BIPOtoSH2 # Saves the results in dataframe
+Results_CANUtoSH2=MR_CANUtoSH2 # Saves the results in dataframe
+Results_DEPRtoSH2=MR_DEPRtoSH2 # Saves the results in dataframe
+Results_SCHItoSH2=MR_SCHItoSH2 # Saves the results in dataframe
+
+
+twosample_filename<-"twosampleMR_results_1005.xlsx"
+write.xlsx(Results_ADHDtoSH2, file=twosample_filename, sheetName="ADHD")
+write.xlsx(Results_ALCDtoSH2, file=twosample_filename, sheetName="ALCD", append=T)
+write.xlsx(Results_BIPOtoSH2, file=twosample_filename, sheetName="BIPO", append=T)
+write.xlsx(Results_CANUtoSH2, file=twosample_filename, sheetName="CANU", append=T)
+write.xlsx(Results_DEPRtoSH2, file=twosample_filename, sheetName="DEPR", append=T)
+write.xlsx(Results_SCHItoSH2, file=twosample_filename, sheetName="SCHI", append=T)
+
+
+MR_Egger_int=rbind(
+      mr_pleiotropy_test(DataMR_ADHDtoSH),
+      mr_pleiotropy_test(DataMR_ALCDtoSH),
+      mr_pleiotropy_test(DataMR_BIPOtoSH),
+      mr_pleiotropy_test(DataMR_CANUtoSH),
+      mr_pleiotropy_test(DataMR_DEPRtoSH),
+      mr_pleiotropy_test(DataMR_SCHItoSH))
+
+write.xlsx(MR_Egger_int, file="MR_Egger.xlsx")
+```
+
+
+### I2GX stats for SH
+```{r I2GX stats for SH, eval=F, echo=T}
+#CITE: Bowden et al. Assessing the suitability of summary data for 2-sample MR using MR-Egger regression, 
+# role of I2 stats
+# MR Egger assumes NOME,i.e. No Measurement Error
+# When NOME is not satifised, there is 'regression dilution', 
+# which means that when there is error in the SNP-exposure association, 
+# the MR Egger estimate will underestimate the true causal effect, 
+# and in some cases have low power to estimate pleiotropy
+# This can be mitigated by first 
+# 1/Calculating the I2 , which is based on the Cochran statistics and give an indication of measurement error 
+# (1 no error, 0 only error)
+# 2a/ Correcting crudly the MR Beta by: BMR/I2 but can be unstable
+# 2b/ Simulation analyses to correct for measurement error
+
+#Guidelines are: 
+#-if I2 >90% nothing to do (the causal estimate will be affected by only 10%)
+#-if  60% < I2 < 90%, apply correction
+#-if    I2 < 60% don't use MR Egger at all because estimate very diluted and low power. 
+
+#Preliminary step: take only variants with smallest absolute effect sizes, if not (we have I2 >99%) and no correction needed
+DataMR_ADHDtoSH_keep2<-DataMR_ADHDtoSH_keep[abs(
+                      DataMR_ADHDtoSH_keep$beta.exposure)<
+                        quantile(abs(DataMR_ADHDtoSH_keep$beta.exposure),0.20),] #select variants with the weaker betas
+
+dim(DataMR_ADHDtoSH_keep2)# 48 variants selected. Note that a very small number for MR Egger (e.g. 8) yield completely unstable estimates.
+
+#calculate baselines estimates on this new dataset with weaker instruments
+(MR_ADHDtoSH_I2 <- mr(DataMR_ADHDtoSH_keep, method_list=c("mr_ivw","mr_egger_regression")))
+#IVW much bigger
+
+
+#function adapted from MendelianRandomisation:
+QQ = function(Bx,Bxse,Byse)
+  {Q = sum((Bxse/Byse)^-2*(Bx/Byse-weighted.mean(Bx/Byse, w=(Bxse/Byse)^-2))^2)
+  I = max(0, (Q-(length(Bx)-1))/Q)
+  cat("I^2_GX statistic: ", decimals(I*100, 1),"%\n",sep="")
+  }
+
+#Function to calculate I2
+Isq = function(y,s){
+  k = length(y)
+  w = 1/s^2; sum.w = sum(w)
+  mu.hat = sum(y*w)/sum.w
+  Q  = sum(w*(y-mu.hat)^2)
+  Isq= (Q - (k-1))/Q
+  Isq  = max(0,Isq)
+  return(Isq)
+}
+
+#if BetaXG and seBetaXG represent the vector of SNP-exposure estimates and standar errors, 
+#and BetaYG and seBetaYG represent the vector of SNP-exposure estimates and standard errors. We calculate the I 2
+#then do: Isq(BetaXG,seBetaXG)
+#for MR regression weighted: Isq(BetaXG/seBetaYG,seBetaXG/seBetaYG)
+
+length(DataMR_ADHDtoSH_keep$beta.exposure)
+
+
+#1. Calculate I2 (I squared)
+#ADHD
+(isqADHD=Isq(y=DataMR_ADHDtoSH_keep$beta.exposure,
+             s=DataMR_ADHDtoSH_keep$se.exposure))
+
+(isqADHD_w=Isq(y=DataMR_ADHDtoSH_keep$beta.exposure/DataMR_ADHDtoSH_keep$se.outcome,
+               s=DataMR_ADHDtoSH_keep$se.exposure/DataMR_ADHDtoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_ADHDtoSH_keep$beta.exposure,
+   Bxse=DataMR_ADHDtoSH_keep$se.exposure,
+   Byse=DataMR_ADHDtoSH_keep$se.outcome)
+
+#94.9%
+
+#ALCD
+(isqALCD=Isq(y=DataMR_ALCDtoSH_keep$beta.exposure,
+             s=DataMR_ALCDtoSH_keep$se.exposure))
+
+(isqALCD_w=Isq(y=DataMR_ALCDtoSH_keep$beta.exposure/DataMR_ALCDtoSH_keep$se.outcome,
+               s=DataMR_ALCDtoSH_keep$se.exposure/DataMR_ALCDtoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_ALCDtoSH_keep$beta.exposure,
+   Bxse=DataMR_ALCDtoSH_keep$se.exposure,
+   Byse=DataMR_ALCDtoSH_keep$se.outcome)
+
+#93.0%
+
+#BIPO
+(isqBIPO=Isq(y=DataMR_BIPOtoSH_keep$beta.exposure,
+             s=DataMR_BIPOtoSH_keep$se.exposure))
+
+(isqBIPO_w=Isq(y=DataMR_BIPOtoSH_keep$beta.exposure/DataMR_BIPOtoSH_keep$se.outcome,
+               s=DataMR_BIPOtoSH_keep$se.exposure/DataMR_BIPOtoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_BIPOtoSH_keep$beta.exposure,
+   Bxse=DataMR_BIPOtoSH_keep$se.exposure,
+   Byse=DataMR_BIPOtoSH_keep$se.outcome)
+
+#94.4%
+
+#CANU
+(isqCANU=Isq(y=DataMR_CANUtoSH_keep$beta.exposure,
+             s=DataMR_CANUtoSH_keep$se.exposure))
+
+(isqCANU_w=Isq(y=DataMR_CANUtoSH_keep$beta.exposure/DataMR_CANUtoSH_keep$se.outcome,
+               s=DataMR_CANUtoSH_keep$se.exposure/DataMR_CANUtoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_CANUtoSH_keep$beta.exposure,
+   Bxse=DataMR_CANUtoSH_keep$se.exposure,
+   Byse=DataMR_CANUtoSH_keep$se.outcome)
+
+#94.7%
+
+#DEPR
+(isqDEPR=Isq(y=DataMR_DEPRtoSH_keep$beta.exposure,
+             s=DataMR_DEPRtoSH_keep$se.exposure))
+
+(isqDEPR_w=Isq(y=DataMR_DEPRtoSH_keep$beta.exposure/DataMR_DEPRtoSH_keep$se.outcome,
+               s=DataMR_DEPRtoSH_keep$se.exposure/DataMR_DEPRtoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_DEPRtoSH_keep$beta.exposure,
+   Bxse=DataMR_DEPRtoSH_keep$se.exposure,
+   Byse=DataMR_DEPRtoSH_keep$se.outcome)
+
+#94.7%
+
+#SCHI
+(isqSCHI=Isq(y=DataMR_SCHItoSH_keep$beta.exposure,
+             s=DataMR_SCHItoSH_keep$se.exposure))
+
+(isqSCHI_w=Isq(y=DataMR_SCHItoSH_keep$beta.exposure/DataMR_SCHItoSH_keep$se.outcome,
+               s=DataMR_SCHItoSH_keep$se.exposure/DataMR_SCHItoSH_keep$se.outcome))
+
+QQ(Bx=DataMR_SCHItoSH_keep$beta.exposure,
+   Bxse=DataMR_SCHItoSH_keep$se.exposure,
+   Byse=DataMR_SCHItoSH_keep$se.outcome)
+
+#95.7%
+
+#despite weaker variant, I2 is high so really no problem of weak instrument with LDL
+
+#### now try doing this when the p-value threshold is 5e-8. 
+
+## On hindsight, these are quite similar to the codes run above, could have saved them as rds rather than rerunning them in a different script
+
+#resubset the SNPs, starting from the exposure data.
+exposure_ADHD_dat_5e8=subset(exposure_ADHD_dat, pval.exposure < 5e-8)
+exposure_ALCD_dat_5e8=subset(exposure_ALCD_dat, pval.exposure < 5e-8)
+exposure_BIPO_dat_5e8=subset(exposure_BIPO_dat, pval.exposure < 5e-8)
+exposure_CANU_dat_5e8=subset(exposure_CANU_dat, pval.exposure < 5e-8)
+exposure_DEPR_dat_5e8=subset(exposure_DEPR_dat, pval.exposure < 5e-8)
+exposure_SCHI_dat_5e8=subset(exposure_SCHI_dat, pval.exposure < 5e-8)
+
+# Lets have a look at the number of SNPs that we would include:
+
+
+#clumping
+exposure_ADHD_dat_5e8_clumped=clump_data(exposure_ADHD_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_ALCD_dat_5e8_clumped=clump_data(exposure_ALCD_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_BIPO_dat_5e8_clumped=clump_data(exposure_BIPO_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_CANU_dat_5e8_clumped=clump_data(exposure_CANU_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_DEPR_dat_5e8_clumped=clump_data(exposure_DEPR_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+exposure_SCHI_dat_5e8_clumped=clump_data(exposure_SCHI_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+#choose p=5e-8 threshold.....harmonise data
+DataMR_ADHDtoSH_5e8 <- harmonise_data(exposure_dat = exposure_ADHD_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+DataMR_ALCDtoSH_5e8 <- harmonise_data(exposure_dat = exposure_ALCD_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+DataMR_BIPOtoSH_5e8 <- harmonise_data(exposure_dat = exposure_BIPO_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+DataMR_CANUtoSH_5e8 <- harmonise_data(exposure_dat = exposure_CANU_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+DataMR_DEPRtoSH_5e8 <- harmonise_data(exposure_dat = exposure_DEPR_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+DataMR_SCHItoSH_5e8 <- harmonise_data(exposure_dat = exposure_SCHI_dat_5e8_clumped, 
+                                      outcome_dat = outcome_SH_dat, action=2)
+
+
+DataMR_ADHDtoSH_keep_5e8=subset(DataMR_ADHDtoSH_5e8, mr_keep==TRUE)
+DataMR_ALCDtoSH_keep_5e8=subset(DataMR_ALCDtoSH_5e8, mr_keep==TRUE)
+DataMR_BIPOtoSH_keep_5e8=subset(DataMR_BIPOtoSH_5e8, mr_keep==TRUE)
+DataMR_CANUtoSH_keep_5e8=subset(DataMR_CANUtoSH_5e8, mr_keep==TRUE)
+DataMR_DEPRtoSH_keep_5e8=subset(DataMR_DEPRtoSH_5e8, mr_keep==TRUE)
+DataMR_SCHItoSH_keep_5e8=subset(DataMR_SCHItoSH_5e8, mr_keep==TRUE)
+
+###### I2GX for 5e-8 SNPs
+
+(isqADHD_5e8=Isq(y=DataMR_ADHDtoSH_keep_5e8$beta.exposure,
+                 s=DataMR_ADHDtoSH_keep_5e8$se.exposure))
+
+(isqADHD_w_5e8=Isq(y=DataMR_ADHDtoSH_keep_5e8$beta.exposure/DataMR_ADHDtoSH_keep_5e8$se.outcome,
+                   s=DataMR_ADHDtoSH_keep_5e8$se.exposure/DataMR_ADHDtoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_ADHDtoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_ADHDtoSH_keep_5e8$se.exposure,
+   Byse=DataMR_ADHDtoSH_keep_5e8$se.outcome)
+#ADHD
+#97.3%
+
+#ALCD
+(isqALCD_5e8=Isq(y=DataMR_ALCDtoSH_keep_5e8$beta.exposure,
+                 s=DataMR_ALCDtoSH_keep_5e8$se.exposure))
+
+(isqALCD_w_5e8=Isq(y=DataMR_ALCDtoSH_keep_5e8$beta.exposure/DataMR_ALCDtoSH_keep_5e8$se.outcome,
+                   s=DataMR_ALCDtoSH_keep_5e8$se.exposure/DataMR_ALCDtoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_ALCDtoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_ALCDtoSH_keep_5e8$se.exposure,
+   Byse=DataMR_ALCDtoSH_keep_5e8$se.outcome)
+
+#only 1 SNP, cannot do the calculation
+
+#BIPO
+
+(isqBIPO_5e8=Isq(y=DataMR_BIPOtoSH_keep_5e8$beta.exposure,
+                 s=DataMR_BIPOtoSH_keep_5e8$se.exposure))
+
+(isqBIPO_w_5e8=Isq(y=DataMR_BIPOtoSH_keep_5e8$beta.exposure/DataMR_BIPOtoSH_keep_5e8$se.outcome,
+                   s=DataMR_BIPOtoSH_keep_5e8$se.exposure/DataMR_BIPOtoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_BIPOtoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_BIPOtoSH_keep_5e8$se.exposure,
+   Byse=DataMR_BIPOtoSH_keep_5e8$se.outcome)
+#only 4 SNPs
+#46.5% if not weighted, 0 if weighted.
+
+#CANU
+(isqCANU_5e8=Isq(y=DataMR_CANUtoSH_keep_5e8$beta.exposure,
+                 s=DataMR_CANUtoSH_keep_5e8$se.exposure))
+
+(isqCANU_w_5e8=Isq(y=DataMR_CANUtoSH_keep_5e8$beta.exposure/DataMR_CANUtoSH_keep_5e8$se.outcome,
+                   s=DataMR_CANUtoSH_keep_5e8$se.exposure/DataMR_CANUtoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_CANUtoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_CANUtoSH_keep_5e8$se.exposure,
+   Byse=DataMR_CANUtoSH_keep_5e8$se.outcome)
+
+#no SNP less than 5e-8
+
+#DEPR
+
+(isqDEPR_5e8=Isq(y=DataMR_DEPRtoSH_keep_5e8$beta.exposure,
+                 s=DataMR_DEPRtoSH_keep_5e8$se.exposure))
+
+(isqDEPR_w_5e8=Isq(y=DataMR_DEPRtoSH_keep_5e8$beta.exposure/DataMR_DEPRtoSH_keep_5e8$se.outcome,
+                   s=DataMR_DEPRtoSH_keep_5e8$se.exposure/DataMR_DEPRtoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_DEPRtoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_DEPRtoSH_keep_5e8$se.exposure,
+   Byse=DataMR_DEPRtoSH_keep_5e8$se.outcome)
+#only 2 SNPs
+# 0% for both weighted and unweighted
+
+#SCHI
+(isqSCHI_5e8=Isq(y=DataMR_SCHItoSH_keep_5e8$beta.exposure,
+                 s=DataMR_SCHItoSH_keep_5e8$se.exposure))
+
+(isqSCHI_w_5e8=Isq(y=DataMR_SCHItoSH_keep_5e8$beta.exposure/DataMR_SCHItoSH_keep_5e8$se.outcome,
+                   s=DataMR_SCHItoSH_keep_5e8$se.exposure/DataMR_SCHItoSH_keep_5e8$se.outcome))
+
+QQ(Bx=DataMR_SCHItoSH_keep_5e8$beta.exposure,
+   Bxse=DataMR_SCHItoSH_keep_5e8$se.exposure,
+   Byse=DataMR_SCHItoSH_keep_5e8$se.outcome)
+#135 SNPs
+#97.8%
+```
+
+### Outcome: SSH
+
+```{r rerun another MR for SSH, eval=F, echo=T}
+######## rerun another MR for SSH ##########
+# we keep the exposure data
+#now load new outcome data - the SSH sumstats
+outcome_SSH_dat <- read_outcome_data(
+  snps = NULL,                            # Keep 'snps=NULL' so that all SNPs are uploaded
+  filename = "ssh_sumstats_v2",    
+  sep = "\t",                           
+  snp_col = "rsid",                       
+  beta_col = "beta",                      
+  se_col = "se",                          
+  effect_allele_col = "alt",    
+  other_allele_col = "ref",     
+  pval_col = "pval",                         
+  eaf_col="AF")    
+
+outcome_SSH_dat$outcome <- "SSH" # Provide a name for the outcome  
+length(outcome_SSH_dat$SNP)    
+
+DataMR_ADHDtoSSH <- harmonise_data(exposure_dat = exposure_ADHD_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+DataMR_ALCDtoSSH <- harmonise_data(exposure_dat = exposure_ALCD_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+DataMR_BIPOtoSSH <- harmonise_data(exposure_dat = exposure_BIPO_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+DataMR_CANUtoSSH <- harmonise_data(exposure_dat = exposure_CANU_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+DataMR_DEPRtoSSH <- harmonise_data(exposure_dat = exposure_DEPR_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+DataMR_SCHItoSSH <- harmonise_data(exposure_dat = exposure_SCHI_dat_5e5_clumped, 
+                                   outcome_dat = outcome_SSH_dat, action=2)
+
+DataMR_ADHDtoSSH_keep=subset(DataMR_ADHDtoSSH, mr_keep==TRUE)
+DataMR_ALCDtoSSH_keep=subset(DataMR_ALCDtoSSH, mr_keep==TRUE)
+DataMR_BIPOtoSSH_keep=subset(DataMR_BIPOtoSSH, mr_keep==TRUE)
+DataMR_CANUtoSSH_keep=subset(DataMR_CANUtoSSH, mr_keep==TRUE)
+DataMR_DEPRtoSSH_keep=subset(DataMR_DEPRtoSSH, mr_keep==TRUE)
+DataMR_SCHItoSSH_keep=subset(DataMR_SCHItoSSH, mr_keep==TRUE)
+
+MR_ADHDtoSSH2<- mr(DataMR_ADHDtoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median", 
+                                                  "mr_ivw", 
+                                                  "mr_egger_regression"))
+
+MR_ALCDtoSSH2<- mr(DataMR_ALCDtoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median", 
+                                                  "mr_ivw", 
+                                                  "mr_egger_regression"))
+
+MR_BIPOtoSSH2<- mr(DataMR_BIPOtoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median",
+                                                  "mr_ivw",
+                                                  "mr_egger_regression"))
+
+MR_CANUtoSSH2<- mr(DataMR_CANUtoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median",
+                                                  "mr_ivw", 
+                                                  "mr_egger_regression"))
+
+MR_DEPRtoSSH2<- mr(DataMR_DEPRtoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median", 
+                                                  "mr_ivw", 
+                                                  "mr_egger_regression"))
+
+MR_SCHItoSSH2<- mr(DataMR_SCHItoSSH,method_list=c("mr_raps", 
+                                                  "mr_weighted_median", 
+                                                  "mr_ivw", 
+                                                  "mr_egger_regression"))
+
+
+
+write.xlsx(MR_ADHDtoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="ADHD")
+write.xlsx(MR_ALCDtoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="ALCD", append=T)
+write.xlsx(MR_BIPOtoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="BIPO", append=T)
+write.xlsx(MR_CANUtoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="CANU", append=T)
+write.xlsx(MR_DEPRtoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="DEPR", append=T)
+write.xlsx(MR_SCHItoSSH2, file="twosampleMR_SSH_14_Feb_2020.xlsx", sheetName="SCHI", append=T)
+
+MR_Egger_int_ssh=rbind(mr_pleiotropy_test(DataMR_ADHDtoSSH),
+                       mr_pleiotropy_test(DataMR_ALCDtoSSH),
+                       mr_pleiotropy_test(DataMR_BIPOtoSSH),
+                       mr_pleiotropy_test(DataMR_CANUtoSSH),
+                       mr_pleiotropy_test(DataMR_DEPRtoSSH),
+                       mr_pleiotropy_test(DataMR_SCHItoSSH))
+
+write.xlsx(MR_Egger_int_ssh, file="MR_Egger_14_Feb_2020.xlsx")
+```
+
+### I2GX stats for SSH
+```{r I2GX stats for SSH, echo=T, eval=F}
+
+#if BetaXG and seBetaXG represent the vector of SNP-exposure estimates and standar errors, 
+#and BetaYG and seBetaYG represent the vector of SNP-exposure estimates and standard errors. We calculate the I^2
+#then do: Isq(BetaXG,seBetaXG)
+#for MR regression weighted: Isq(BetaXG/seBetaYG,seBetaXG/seBetaYG)
+
+
+
+#1. Calculate I2 (I squared)
+#ADHD
+(isqADHD_SSH=Isq(y=DataMR_ADHDtoSSH_keep$beta.exposure,
+                 s=DataMR_ADHDtoSSH_keep$se.exposure))
+
+(isqADHD_w_SSH=Isq(y=DataMR_ADHDtoSSH_keep$beta.exposure/DataMR_ADHDtoSSH_keep$se.outcome,
+                   s=DataMR_ADHDtoSSH_keep$se.exposure/DataMR_ADHDtoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_ADHDtoSSH_keep$beta.exposure,
+   Bxse=DataMR_ADHDtoSSH_keep$se.exposure,
+   Byse=DataMR_ADHDtoSSH_keep$se.outcome)
+# I^2_GX statistic: 94.9%
+
+
+#ALCD
+(isqALCD_SSH=Isq(y=DataMR_ALCDtoSSH_keep$beta.exposure,
+                 s=DataMR_ALCDtoSSH_keep$se.exposure))
+
+(isqALCD_w_SSH=Isq(y=DataMR_ALCDtoSSH_keep$beta.exposure/DataMR_ALCDtoSSH_keep$se.outcome,
+                   s=DataMR_ALCDtoSSH_keep$se.exposure/DataMR_ALCDtoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_ALCDtoSSH_keep$beta.exposure,
+   Bxse=DataMR_ALCDtoSSH_keep$se.exposure,
+   Byse=DataMR_ALCDtoSSH_keep$se.outcome)
+# I^2_GX statistic: 93.0%
+
+#BIPO
+(isqBIPO_SSH=Isq(y=DataMR_BIPOtoSSH_keep$beta.exposure,
+                 s=DataMR_BIPOtoSSH_keep$se.exposure))
+
+(isqBIPO_w_SSH=Isq(y=DataMR_BIPOtoSSH_keep$beta.exposure/DataMR_BIPOtoSSH_keep$se.outcome,
+                   s=DataMR_BIPOtoSSH_keep$se.exposure/DataMR_BIPOtoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_BIPOtoSSH_keep$beta.exposure,
+   Bxse=DataMR_BIPOtoSSH_keep$se.exposure,
+   Byse=DataMR_BIPOtoSSH_keep$se.outcome)
+# I^2_GX statistic: 94.4%
+
+#CANU
+(isqCANU_SSH=Isq(y=DataMR_CANUtoSSH_keep$beta.exposure,
+                 s=DataMR_CANUtoSSH_keep$se.exposure))
+
+(isqCANU_w_SSH=Isq(y=DataMR_CANUtoSSH_keep$beta.exposure/DataMR_CANUtoSSH_keep$se.outcome,
+                   s=DataMR_CANUtoSSH_keep$se.exposure/DataMR_CANUtoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_CANUtoSSH_keep$beta.exposure,
+   Bxse=DataMR_CANUtoSSH_keep$se.exposure,
+   Byse=DataMR_CANUtoSSH_keep$se.outcome)
+# I^2_GX statistic: 94.7%
+
+#DEPR
+(isqDEPR_SSH=Isq(y=DataMR_DEPRtoSSH_keep$beta.exposure,
+                 s=DataMR_DEPRtoSSH_keep$se.exposure))
+
+(isqDEPR_w_SSH=Isq(y=DataMR_DEPRtoSSH_keep$beta.exposure/DataMR_DEPRtoSSH_keep$se.outcome,
+                   s=DataMR_DEPRtoSSH_keep$se.exposure/DataMR_DEPRtoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_DEPRtoSSH_keep$beta.exposure,
+   Bxse=DataMR_DEPRtoSSH_keep$se.exposure,
+   Byse=DataMR_DEPRtoSSH_keep$se.outcome)
+
+# I^2_GX statistic: 94.7%
+
+#SCHI
+(isqSCHI_SSH=Isq(y=DataMR_SCHItoSSH_keep$beta.exposure,
+                 s=DataMR_SCHItoSSH_keep$se.exposure))
+
+(isqSCHI_w_SSH=Isq(y=DataMR_SCHItoSSH_keep$beta.exposure/DataMR_SCHItoSSH_keep$se.outcome,
+                   s=DataMR_SCHItoSSH_keep$se.exposure/DataMR_SCHItoSSH_keep$se.outcome))
+
+QQ(Bx=DataMR_SCHItoSSH_keep$beta.exposure,
+   Bxse=DataMR_SCHItoSSH_keep$se.exposure,
+   Byse=DataMR_SCHItoSSH_keep$se.outcome)
+# I^2_GX statistic: 95.7% 
+```
+
+## Multivariate MR
+After conducting univariate MR, significant exposures are modelled together in multivariate MR model
+
+### Multivariate MR for SH using 5e-5 threshold
+```{r echo=T, eval=F}
+#multivariate MR for SH and other traits (ADHD, BIPO, CANU, DEPR, SCHI) - take out CROS.
+# steps:
+# 1. read exposure data
+# 2. select 5e-5 threshold and clump the SNPs for exposure data
+# 3. rbind exposure data 
+# 4. read outcome data
+# 5. harmonise the data
+# 6. conduct multivariate MR
+library(data.table)
+library(TwoSampleMR)
+library(MendelianRandomization)
+library(gmodels)
+
+
+                                    # step 1: Read exposure data for SCHI, DEPR and ADHD
+# ADHD
+exposure_ADHD_dat <- read_exposure_data(
+  filename = "ADHD", 
+  sep = "\t",                
+  snp_col = "SNP",          
+  beta_col = "beta",         
+  se_col = "beta_se",        
+  effect_allele_col = "A1",  
+  other_allele_col = "A2",   
+  pval_col = "P")            
+
+exposure_ADHD_dat$exposure="ADHD" 
+length(exposure_ADHD_dat$SNP) 
+
+exposure_DEPR_dat <- read_exposure_data(
+  filename = "DEPR", 
+  sep = "\t",                
+  snp_col = "SNP",           
+  beta_col = "beta",         
+  se_col = "beta_se",        
+  effect_allele_col = "A1",  
+  other_allele_col = "A2",   
+  pval_col = "P",            
+  eaf_col="FREQ")            
+
+exposure_DEPR_dat$exposure="DEPR"
+ length(exposure_DEPR_dat$SNP) 
+
+exposure_SCHI_dat <- read_exposure_data(
+  filename = "SCHI", 
+  sep = "\t",                
+  snp_col = "SNP",           
+  beta_col = "beta",         
+  se_col = "beta_se",        
+  effect_allele_col = "A1",  
+  other_allele_col = "A2",   
+  pval_col = "P",            
+  eaf_col="FREQ")            
+
+exposure_SCHI_dat$exposure="SCHI" # Provide a name for the exposure variable
+
+length(exposure_SCHI_dat$SNP) 
+
+#p-value threshold
+ exposure_ADHD_dat_5e5=subset(exposure_ADHD_dat, pval.exposure < 5e-5)
+ exposure_DEPR_dat_5e5=subset(exposure_DEPR_dat, pval.exposure < 5e-5)
+ exposure_SCHI_dat_5e5=subset(exposure_SCHI_dat, pval.exposure < 5e-5)
+
+# #clumping
+ exposure_ADHD_dat_5e5_clumped=clump_data(exposure_ADHD_dat_5e5, 
+                                          clump_r2 = 0.001, 
+                                          clump_p1 = 1, 
+                                          clump_p2 = 1, 
+                                          clump_kb = 250)
+ 
+ exposure_DEPR_dat_5e5_clumped=clump_data(exposure_DEPR_dat_5e5, 
+                                          clump_r2 = 0.001, 
+                                          clump_p1 = 1, 
+                                          clump_p2 = 1, 
+                                          clump_kb = 250)
+ 
+ exposure_SCHI_dat_5e5_clumped=clump_data(exposure_SCHI_dat_5e5, 
+                                          clump_r2 = 0.001, 
+                                          clump_p1 = 1, 
+                                          clump_p2 = 1, 
+                                          clump_kb = 250)
+
+
+  # step 2: merge the data
+
+
+exposure_dat=do.call("rbind", list(exposure_ADHD_dat_5e5_clumped,
+                                   exposure_DEPR_dat_5e5_clumped,
+                                   exposure_SCHI_dat_5e5_clumped))
+
+
+write.table(exposure_dat, file="initial_SNPS")
+
+# read 'outcome' data based on the new list of SNPs using read_outcome data then convert into exposure
+ADHD=read_outcome_data(
+        snps=exposure_dat$SNP,
+        filename = "ADHD",
+        sep = "\t",                
+        snp_col = "SNP",           
+        beta_col = "beta",         
+        se_col = "beta_se",        
+        effect_allele_col = "A1",  
+        other_allele_col = "A2",   
+        pval_col = "P")            
+ADHD$outcome <- "ADHD"
+exposure_ADHD2 <- convert_outcome_to_exposure(ADHD)
+
+
+
+DEPR=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "DEPR",
+  sep = "\t",                 
+  snp_col = "SNP",           
+  beta_col = "beta",         
+  se_col = "beta_se",        
+  effect_allele_col = "A1",  
+  other_allele_col = "A2",   
+  pval_col = "P"
+  eaf_col="FREQ")          
+DEPR$outcome <- "DEPR"
+exposure_DEPR2 <- convert_outcome_to_exposure(DEPR)
+
+
+
+SCHI=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "SCHI",
+  sep = "\t",                
+  snp_col = "SNP",          
+  beta_col = "beta",        
+  se_col = "beta_se",       
+  effect_allele_col = "A1", 
+  other_allele_col = "A2",  
+  pval_col = "P",
+  eaf_col="FREQ")           
+SCHI$outcome <- "SCHI"
+exposure_SCHI2 <- convert_outcome_to_exposure(SCHI)
+
+
+exposure_dat2=do.call("rbind", list(exposure_ADHD2,
+                                    exposure_DEPR2,
+                                    exposure_SCHI2))
+
+write.table(exposure_dat2,file="compiled_SNPs_rbind")
+
+                               ##### 4. Read outcome data ####
+
+ outcome_SH_dat <- read_outcome_data(
+   snps = exposure_dat$SNP,                            
+   filename = "selfharm_sumstats_v2",    
+   sep = "\t",                          
+   snp_col = "rsid",                     
+   beta_col = "beta",                    
+   se_col = "se",                        
+   effect_allele_col = "alt",    
+   other_allele_col = "ref",      
+   pval_col = "pval",                    
+   eaf_col="AF")    
+
+ outcome_SH_dat$outcome <- "SH" 
+
+write.table(outcome_SH_dat$SNP, file="selfharm_SNPs")
+
+
+ 
+                                    # 5. Harmonise the data
+ 
+ mvdat <- mv_harmonise_data(exposure_dat2, outcome_SH_dat) 
+ write.table(mvdat$exposure_beta, file="mv_mr_harmonised_snps")
+                                   
+ 
+                                     # 6. Conduct multivariate MR
+# #using TwoSampleMR package
+ MultiMr <- mv_multiple(mvdat, instrument_specific=F, plots=T, pval_threshold=1)
+ MultiMr$result
+ 
+ #save the results
+ write.csv( MultiMr$result,file="TwoSampleMR_MVMR_results_28_Feb.csv")
+ pdf("plot_TwoSampleMR_MVMR_28_Feb.pdf")
+ MultiMr$plot
+ dev.off()
+ # 
+ 
+```
+
+
+### Multivariate MR for SH without DEPR
+
+We have to repeat the same steps as above because this will give us a different number of SNPs.
+```{r echo=T, eval=F}
+# steps:
+# 1. read exposure data
+# 2. select 5e-5 threshold and clump the SNPs for exposure data
+# 3. rbind exposure data 
+# 4. read outcome data
+# 5. harmonise the data
+# 6. conduct multivariate MR
+library(data.table)
+library(TwoSampleMR)
+library(MendelianRandomization)
+library(gmodels)
+
+
+# step 1: Read exposure data for SCHI, DEPR and ADHD
+# ADHD
+exposure_ADHD_dat <- read_exposure_data(
+  filename = "ADHD", 
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value           
+print("ADHD")
+exposure_ADHD_dat$exposure="ADHD" # Provide a name for the exposure variable
+head(exposure_ADHD_dat)
+length(exposure_ADHD_dat$SNP)
+
+
+
+exposure_SCHI_dat <- read_exposure_data(
+  filename = "SCHI", # This is the filename of the summary statistics file for your exposure
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",            # Insert the name of column with p-value
+  eaf_col="FREQ")            # Insert the name of column with effect allele frequency
+print("SCHI")
+exposure_SCHI_dat$exposure="SCHI" # Provide a name for the exposure variable
+head(exposure_SCHI_dat)
+length(exposure_SCHI_dat$SNP) 
+
+#p-value threshold
+exposure_ADHD_dat_5e5=subset(exposure_ADHD_dat, pval.exposure < 5e-5)
+#exposure_DEPR_dat_5e5=subset(exposure_DEPR_dat, pval.exposure < 5e-5)
+exposure_SCHI_dat_5e5=subset(exposure_SCHI_dat, pval.exposure < 5e-5)
+# 
+# #clumping
+exposure_ADHD_dat_5e5_clumped=clump_data(exposure_ADHD_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+exposure_SCHI_dat_5e5_clumped=clump_data(exposure_SCHI_dat_5e5, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+print("ADHD")
+length(exposure_ADHD_dat_5e5_clumped$SNP)
+head(exposure_ADHD_dat_5e5_clumped)
+
+print("SCHI")
+length(exposure_SCHI_dat_5e5_clumped$SNP)
+head(exposure_SCHI_dat_5e5_clumped)
+
+#just to check the order
+# step 2: merge the data
+#merge the data by rbind, do clumping and 
+
+exposure_dat=do.call("rbind", list(exposure_ADHD_dat_5e5_clumped,
+                                   exposure_SCHI_dat_5e5_clumped))
+
+print("new list of SNPs, number of SNPs:")
+length(exposure_dat$SNP)
+
+
+
+
+
+
+#       read exposure data based on the new list of SNPs using read_outcome data then convert
+ADHD=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "ADHD",
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value    
+ADHD$outcome <- "ADHD"
+exposure_ADHD2 <- convert_outcome_to_exposure(ADHD)
+print("exposure_ADHD2 SNPs")
+length(exposure_ADHD2$SNP)
+
+
+SCHI=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "SCHI",
+  sep = "\t",                # Specify whether the file is a tab delimited file ("\t") or a space delimited file ("")
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",
+  eaf_col="FREQ")          # Insert the name of column with p-value
+SCHI$outcome <- "SCHI"
+exposure_SCHI2 <- convert_outcome_to_exposure(SCHI)
+print("exposure_SCHI2 SNPs")
+length(exposure_SCHI2$SNP)
+
+exposure_dat2=do.call("rbind", list(exposure_ADHD2,
+                                    exposure_SCHI2))
+
+
+#                               # 4. Read outcome data
+
+outcome_SH_dat <- read_outcome_data(
+  snps = exposure_dat$SNP,                           
+  filename = "selfharm_sumstats_v2",    
+  sep = "\t",                           
+  snp_col = "rsid",                       
+  beta_col = "beta",                      
+  se_col = "se",                          
+  effect_allele_col = "alt",    
+  other_allele_col = "ref",      
+  pval_col = "pval",                         
+  eaf_col="AF")   
+
+print("Self Harm")
+outcome_SH_dat$outcome <- "SH" # Provide a name for the outcome  
+length(outcome_SH_dat$SNP) 
+ 
+ 
+                                   # 5. Harmonise the data
+ 
+mvdat <- mv_harmonise_data(exposure_dat2, outcome_SH_dat) 
+
+                                   # 6. Conduct multivariate MR
+# using TwoSampleMR package
+MultiMr <- mv_multiple(mvdat, 
+                       instrument_specific=F, 
+                       plots=T, 
+                       pval_threshold=1)
+MultiMr$result
+
+#save the results
+
+write.csv( MultiMr$result,file="TwoSampleMR_MVMR_without_DEPR_results_28_Feb.csv")
+pdf("plot_TwoSampleMR_MVMR__without_DEPR_28_Feb.pdf")
+MultiMr$plot
+dev.off()
+
+```
+
+### Multivariate MR for SH using 5e-8 threshold for SCHI
+
+This was requested by one of the reviewers
+
+```{r echo=T, eval=F}
+#multivariate MR for SH and other traits (ADHD, DEPR, SCHI) with a more stringent threshold.
+# steps:
+# 1. read exposure data
+# 2. select 5e-5 threshold and clump the SNPs for exposure data
+# 3. rbind exposure data 
+# 4. read outcome data
+# 5. harmonise the data
+# 6. conduct multivariate MR
+library(data.table)
+library(TwoSampleMR)
+library(MendelianRandomization)
+library(gmodels)
+
+
+# step 1: Read exposure data for SCHI, DEPR and ADHD
+# ADHD
+exposure_ADHD_dat <- read_exposure_data(
+  filename = "ADHD", 
+  sep = "\t",                
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value           
+print("ADHD")
+exposure_ADHD_dat$exposure="ADHD" # Provide a name for the exposure variable
+head(exposure_ADHD_dat)
+length(exposure_ADHD_dat$SNP) 
+system("wc -l ADHD")
+
+exposure_DEPR_dat <- read_exposure_data(
+  filename = "DEPR",
+  sep = "\t",                
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",            # Insert the name of column with p-value
+  eaf_col="FREQ")            # Insert the name of column with effect allele frequency
+print("DEPR")
+exposure_DEPR_dat$exposure="DEPR"
+# Provide a name for the exposure variable
+head(exposure_DEPR_dat)
+length(exposure_DEPR_dat$SNP) 
+
+schi=fread("SCHI")
+schi2=subset(schi,P<5e-4)
+dim(schi);dim(schi2)
+
+exposure_SCHI_dat<-format_data(schi2, 
+                               type="exposure",
+                               snp_col = "SNP",           
+                               beta_col = "beta",         
+                               se_col = "beta_se",        
+                               effect_allele_col = "A1",  
+                               other_allele_col = "A2",   
+                               pval_col = "P",            
+                               eaf_col="FREQ")            
+
+
+print("SCHI")
+exposure_SCHI_dat$exposure="SCHI" # Provide a name for the exposure variable
+head(exposure_SCHI_dat)
+length(exposure_SCHI_dat$SNP) 
+
+#p-value threshold
+exposure_ADHD_dat_5e8=subset(exposure_ADHD_dat, pval.exposure < 5e-5)
+exposure_DEPR_dat_5e8=subset(exposure_DEPR_dat, pval.exposure < 5e-5)
+exposure_SCHI_dat_5e8=subset(exposure_SCHI_dat, pval.exposure < 5e-8)
+ 
+
+
+# #clumping
+exposure_ADHD_dat_5e8_clumped=clump_data(exposure_ADHD_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+exposure_DEPR_dat_5e8_clumped=clump_data(exposure_DEPR_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+exposure_SCHI_dat_5e8_clumped=clump_data(exposure_SCHI_dat_5e8, 
+                                         clump_r2 = 0.001, 
+                                         clump_p1 = 1, 
+                                         clump_p2 = 1, 
+                                         clump_kb = 250)
+
+#check number of SNPs in harmonisation
+DataMR_ADHDtoSH <- harmonise_data(exposure_dat = exposure_ADHD_dat_5e8_clumped, 
+                                  outcome_dat = outcome_SH_dat, action=2)
+DataMR_DEPRtoSH <- harmonise_data(exposure_dat = exposure_DEPR_dat_5e8_clumped, 
+                                  outcome_dat = outcome_SH_dat, action=2)
+table(DataMR_DEPRtoSH$mr_keep)
+table(DataMR_ADHDtoSH$mr_keep)
+# 
+print("ADHD")
+length(exposure_ADHD_dat_5e8_clumped$SNP)
+head(exposure_ADHD_dat_5e8_clumped)
+table(exposure_ADHD_dat_5e8_clumped$mr_keep.exposure) #296 SNPs
+
+print("DEPR")
+length(exposure_DEPR_dat_5e8_clumped$SNP)
+head(exposure_DEPR_dat_5e8_clumped)
+table(exposure_DEPR_dat_5e8_clumped$mr_keep.exposure) # 252 SNPs
+
+print("SCHI")
+length(exposure_SCHI_dat_5e8_clumped$SNP)
+head(exposure_SCHI_dat_5e8_clumped)
+table(exposure_SCHI_dat_5e8_clumped$mr_keep.exposure) #145 SNPs
+
+# step 2: merge the data
+#merge the data by rbind, do clumping and bind all rows together. 
+exposure_dat=do.call("rbind", list(exposure_ADHD_dat_5e8_clumped[,1:11],
+                                   exposure_DEPR_dat_5e8_clumped[,1:11],
+                                   exposure_SCHI_dat_5e8_clumped))
+
+print("new list of SNPs, number of SNPs:")
+length(exposure_dat$SNP) #693 SNPs together
+
+#       read exposure data based on the new list of SNPs using read_outcome data then convert
+ADHD=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "ADHD",
+  sep = "\t",                
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P")            # Insert the name of column with p-value    
+ADHD$outcome <- "ADHD"
+exposure_ADHD2 <- convert_outcome_to_exposure(ADHD)
+print("exposure_ADHD2 SNPs")
+length(exposure_ADHD2$SNP) #read 159 SNPs out of 161 SNPs
+
+
+DEPR=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "DEPR",
+  sep = "\t",                
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",
+  eaf_col="FREQ")          # Insert the name of column with p-value
+DEPR$outcome <- "DEPR"
+exposure_DEPR2 <- convert_outcome_to_exposure(DEPR)
+print("exposure_DEPR2 SNPs")
+length(exposure_DEPR2$SNP) #157 SNPs out of 161 SNPs
+
+
+SCHI=read_outcome_data(
+  snps=exposure_dat$SNP,
+  filename = "SCHI",
+  sep = "\t",               
+  snp_col = "SNP",           # Insert the name of column that includes the SNP ID's
+  beta_col = "beta",         # Insert the name of column with effect sizes
+  se_col = "beta_se",        # Insert the ame of column with standard errors
+  effect_allele_col = "A1",  # Insert the name of column with the effect allele
+  other_allele_col = "A2",   # Insert the name of column with the non-effect allele
+  pval_col = "P",
+  eaf_col="FREQ")          # Insert the name of column with p-value
+SCHI$outcome <- "SCHI"
+exposure_SCHI2 <- convert_outcome_to_exposure(SCHI)
+print("exposure_SCHI2 SNPs")
+length(exposure_SCHI2$SNP) #158 SNPs out of 161 SNPs
+
+exposure_dat2=do.call("rbind", list(exposure_ADHD2,
+                                    exposure_DEPR2,
+                                    exposure_SCHI2))
+head(exposure_dat2);dim(exposure_dat2) #474 rows, total of 157+158+159 SNPs
+
+
+                               # 4. Read outcome data
+
+outcome_SH_dat <- read_outcome_data(
+  snps = exposure_dat$SNP,                           
+  filename = "selfharm_sumstats_v2",    
+  sep = "\t",                           
+  snp_col = "rsid",                        
+  beta_col = "beta",                      
+  se_col = "se",                          
+  effect_allele_col = "alt",    
+  other_allele_col = "ref",      
+  pval_col = "pval",                         
+  eaf_col="AF")    
+print("Self Harm")
+outcome_SH_dat$outcome <- "SH" # Provide a name for the outcome  
+length(outcome_SH_dat$SNP) # 154 SNPs here
+system("wc -l selfharm_sumstats_v2")   
+
+ 
+ 
+                                   # 5. Harmonise the data
+ 
+mvdat <- mv_harmonise_data(exposure_dat2, outcome_SH_dat) 
+mv_mr_harmonised_snps=as.data.frame(mvdat$exposure_beta) 
+dim(mv_mr_harmonised_snps) #128 rows
+
+
+                                   # 6. Conduct multivariate MR
+# #using TwoSampleMR package
+MultiMr <- mv_multiple(mvdat, instrument_specific=F, plots=T, pval_threshold=1)
+MultiMr$result
+write.csv( MultiMr$result,file="TwoSampleMR_MVMR_results_16_Feb_2020.csv")
+
+#using MendelianRandomisation package
+str(mvdat)
+MulitMRdata <- data.frame(bx=mvdat$exposure_beta, 
+                          bxse=mvdat$exposure_se,
+                          by.SH=mvdat$outcome_beta,
+                          byse.SH=mvdat$outcome_se) 
+
+MRMVInputObject <- mr_mvinput(bx = cbind(MulitMRdata$bx.ADHD, 
+                                         MulitMRdata$bx.DEPR,
+                                         MulitMRdata$bx.SCHI),
+                              bxse = cbind(MulitMRdata$bxse.ADHD, 
+                                           MulitMRdata$bxse.DEPR,
+                                           MulitMRdata$bxse.SCHI),
+                              by = MulitMRdata$by.SH,
+                              byse = MulitMRdata$byse.SH,
+                              exposure=c("ADHD","DEPR","SCHI"))
+mr_mvivw(MRMVInputObject)
+```
+
+### Calculate the number of SNPs
+
+In this code chunk I calculated the number of SNPs involved in MVMR.
+```{r eval=F,echo=T}
+
+##figure out the number of SNPs
+list_A=exposure_dat #"initial_SNPS"
+list_B=exposure_dat2 #fread("compiled_SNPs_rbind",verbose=T)
+list_C=mvdat$exposure_beta #fread("mv_mr_harmonised_snps",verbose=T)
+list_D=as.data.frame(outcome_SH_dat$SNP) #fread("selfharm_SNPs",verbose=T)
+dim(list_A);dim(list_B);dim(list_C);dim(list_D) #list A=161, B=474, C=128, D=154
+
+table(list_A$exposure) #14 for ADHD, 2 for DEPR, 145 for SCHI - total= 161
+
+table(list_B$exposure) #159 for ADHD, 157 for DEPR, 158 for SCHI, total=474
+ADHD=subset(list_B[,1:2],exposure=="ADHD")
+DEPR=subset(list_B[,1:2],exposure=="DEPR")
+SCHI=subset(list_B[,1:2],exposure=="SCHI")
+list_D$outcome="selfharm"
+colnames(list_D)[1]<-"SNP"
+head(list_D)
+
+### draw Venn Diagram for number of snps/overlapping of snps
+library(VennDiagram)
+venn.diagram(x = list(ADHD$SNP , DEPR$SNP , SCHI$SNP, list_D$SNP),
+             category.names = c("ADHD" , "DEPR " , "SCHI", "self-harm"),
+             filename = 'SH_venn_diagramm_mvmr.png',
+             imagetype="png",
+             fill = c('yellow', 'purple', 'green','blue'),
+             cex=2, cat.cex=2)
+
+```
+
+For MVMR with different threshold across the exposures (10E-5 for DEPR and ADHD, 10E-8 for SCHI), the Venn diagram for the number of SNPs involved is shown below:
+
+```{r show-mvmr-snps,echo=F,out.width="50%",fig.align='center'}
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/SH_venn_diagramm_diff_threshold_mvmr.png")
+```
+
+
+
+# 4: Supporting information
+
+## SCZ cases for quantiles 
+
+- output is a file containing the RR of self-harm in each quantile of SCZ PRS and also for the SCZ cases 
+```{r scz-cases-for-quantile, echo=T, eval=F}
+library(data.table)
+library(VennDiagram)
+selfharmdata <- fread("selfharm_small_15_Feb.txt", verbose=T)
+selfharmdata$batch[selfharmdata$batch==""]<-NA
+selfharmdata$AC<-as.factor(selfharmdata$assessment_centre)
+selfharmdata$sexL<-as.factor(selfharmdata$sex)
+selfharmdata$batchL<-as.factor(selfharmdata$batch)
+selfharmdata$f.20480.0.0[selfharmdata$f.20480.0.0==-818]<-NA
+selfharmdata$f.20483.0.0[selfharmdata$f.20483.0.0==-818]<-NA
+
+covariates=c("PC1","PC2","PC3","PC4","PC5","PC6","batchL","AC","sexL","age")
+covariates_IID=c("IID","PC1","PC2","PC3","PC4","PC5","PC6","batchL","AC","sexL","age")
+pcs=selfharmdata[,covariates_IID,with=F]
+
+anti=fread("antipsychotics_ID_06_march_updated.txt",verbose=T)
+dim(anti) #3339 people take antipsychotics
+
+
+
+numquant <- 20
+quant1 <- numquant + 1
+quantscz <- quant1 + 1
+ref <- ceiling(quantscz/2)
+
+scores <- cbind(selfharmdata$IID,selfharmdata$SCHI02_0.3)
+phenofile <- cbind(selfharmdata$IID,selfharmdata$f.20480.0.0)
+
+
+#creating the dataframe
+colnames(phenofile)[c(1, 2)] <- c("ID", "pheno")
+anti$anti<-1
+colnames(anti)[1]<-"IID"
+phenofile=as.data.frame(phenofile)
+colnames(scores)=c("IID","scores")
+
+x <- merge(scores, anti, by = 1, all = T)
+
+forquant <- merge(x = x, 
+                  by.x = "IID", 
+                  y = phenofile, 
+                  by.y = "ID", 
+                  all.x=T, 
+                  all.y=T) 
+
+forquant <-  merge(x = forquant, y = pcs, by = "IID",all.x=T,all.y=T )
+  
+#merge with covariates
+scz=fread("SCZ_ids_HES_06_march.txt",verbose=T)
+scz2=fread("SCZ_ids_self_reported_06_march.txt",verbose=T)
+scz3=fread("SCZ_MHQ_11_march.txt",verbose=T)
+scz$HES_SCZ=1;scz2$Self_SCZ=1;scz3$MHQ_SCZ=1
+scz=as.data.frame(scz);scz2=as.data.frame(scz2);scz3=as.data.frame(scz3)
+```
+
+### Venn Diagram (Fig A in Appendix S1)
+```{r venn-diagram, echo=T, eval=F}
+venn.diagram(x = list(scz$V1 , scz2$V1 , scz3$f.eid),
+             category.names = c("ICD 9/10",
+                                "Non-cancer\nillness\nself-report ",
+                                "MHQ self-report"),
+             filename = 'SCZ_cases_venn_diagramm.png',
+             imagetype="png",
+             fill = c('yellow', 'purple', 'green'),
+             cex=2.5, 
+             cat.cex=2.5,
+             cat.dist=c(0.04,0.04,0.02),
+             cat.fontface="bold",
+             height=5500,width=5500) #75 overlapping, 1121 unique individuals in total
+```
+
+
+```{r show-cases-scz,echo=F,out.width="50%",fig.align='center'}
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/SCZ_cases_venn_diagramm.png")
+```
+
+
+### Derive RR for SCZ
+```{r plot RR, eval=F,echo=T}
+#scz - ICD, scz2 - self-report.
+scz_all=merge(scz,scz2,by=1, all.x=T,all.y=T)
+#781+620>1046
+scz_all=merge(scz_all, scz3, by=1,all.y=T,all.x=T)
+names(scz_all)[1]<-"IID"
+
+scz_data_in=as.data.frame(scz_all$IID)
+scz_data_in$SCZ=NA;scz_data_in$SCZ=1
+
+colnames(scz_data_in)=c("IID","SCZ")
+scz_data_out=merge(scz_data_in, scz_all, by="IID",all.y=T,all.x=T)
+
+forquant=merge(forquant,scz_data_in, by="IID",all.x=T,all.y=T)
+    
+                                                                    forquant$quantiles <- as.numeric(cut(forquant$scores, 
+                          breaks = quantile(forquant$scores, 
+                                            probs = seq(0, 1, 1/numquant), 
+                                            na.rm = T), 
+                          include.lowest=T))
+
+schizophrenia_scores=forquant$scores[forquant$SCZ==1]
+    
+schizophrenia_scores=schizophrenia_scores[!is.na(schizophrenia_scores)]
+#mean score for schizophrenia patients is -0.002210675
+    
+#compare with thresholds
+mean_position=as.numeric(cut(-0.002210675, 
+                             breaks = quantile(forquant$scores, 
+                                               probs = seq(0, 1, 1/numquant), 
+                                               na.rm = T), 
+                             include.lowest=T))
+
+forquant$anti[is.na(forquant$anti)]<-0
+
+#recode scz_anti and scz_no_anti
+forquant$scz_anti=NA;forquant$scz_no_anti=NA
+forquant[which(forquant$SCZ==1 & forquant$anti==1),"scz_anti"] <- 1
+forquant[which(forquant$SCZ==1 & forquant$anti==0),"scz_no_anti"] <- 1
+
+
+forquant$quantiles <- with(forquant, 
+                           ifelse(!is.na(forquant$scz_no_anti), 
+                                  quant1, 
+                                  quantiles))
+
+
+#if SCZ patient (unmedicated), assign a different quantile aka 21
+forquant$quantiles <- with(forquant, 
+                           ifelse(!is.na(forquant$scz_anti), 
+                                  quantscz, 
+                                  quantiles))
+
+
+#if SCZ patient (medicated), assign a different quantile aka 22
+forquant$quantiles <- factor(forquant$quantiles, 
+                        levels = c(ref, 
+                        seq(1, quantscz, 1)[seq(1, quantscz, 1) != ref]))
+
+
+
+
+a=forquant[forquant$quantiles==quant1,] #unmedicated
+table(a$pheno,useNA="always") 
+table(a$SCZ,useNA="always")
+#unmedicated with self-harm data: 56 never self-harmed, 32 did
+
+b=forquant[forquant$quantiles == quantscz,] #medicated
+table(b$pheno,useNA="always") 
+table(b$SCZ,useNA="always")
+#medicated with self-harm data: 57 never self-harmed, 32 did.
+
+ 
+c=forquant[forquant$quantiles != quant1,]
+
+forquant$scz_med=NA
+forquant[which(forquant$SCZ==1 & forquant$anti==1),"scz_med"] <- 1
+forquant[which(forquant$SCZ==1 & forquant$anti==0),"scz_med"] <- 0
+
+chisq <- chisq.test(table(forquant$pheno, forquant$scz_med))
+       print(chisq) #not significantly different. 
+
+
+RR <- exp(summary(glm(pheno ~ ., 
+                        family="poisson", 
+                        data=forquant[,c("pheno","quantiles",covariates)]
+                        ))$coefficients[1:quantscz,1])
+
+ConfIu <- RR + (1.96*summary(glm(pheno ~ quantiles, 
+                                   family="poisson", 
+                                   data =forquant))$coefficients[1:quantscz,2])
+
+ConfIl <- RR - (1.96*summary(glm(pheno ~ quantiles, 
+                                   family="poisson", 
+                                   data = forquant))$coefficients[1:quantscz,2])
+
+RR[1] <- 1
+ConfIu[1] <- 1
+ConfIl[1] <- 1
+list <- seq(1, quantscz, 1)
+list <- list[list != ref]
+quantable <- c(ref, list)
+quantdf <- data.frame(RR, ConfIu, ConfIl, quantable)
+colnames(quantdf) <- c("RR", "CIU", "CIL", "QUANT")
+quantdf <- quantdf[order(quantdf$QUANT),]
+quantdf$label <- c(rep("GenPop", numquant), "SCZnomeds", "SCZmeds")
+quantdf$label <- factor(quantdf$label, levels = c("GenPop", "SCZnomeds", "SCZmeds"))
+
+write.table(quantdf, file="RR_medications_split_quants_SCHI_self_report_or_ICD_or_MHQ.txt")
+    
+```
+
+
+## DEPR cases for quantile
+```{r depr-cases-for-quantile, echo=T, eval=F}
+#step 1: find out the DEPR cases
+# find out the column numbers for the following:
+  # Main ICD9: 
+  # Secondary ICD 9: 
+  # Main ICD 10: 
+  # Secondary ICD 10: 
+library(data.table)
+library(VennDiagram)
+library(tidyverse)
+
+selfharmdata <- fread("selfharm_small_15_Feb.txt", verbose=T)
+selfharmdata$batch[selfharmdata$batch==""]<-NA
+selfharmdata$AC<-as.factor(selfharmdata$assessment_centre)
+selfharmdata$sexL<-as.factor(selfharmdata$sex)
+selfharmdata$batchL<-as.factor(selfharmdata$batch)
+selfharmdata$f.20480.0.0[selfharmdata$f.20480.0.0==-818]<-NA
+selfharmdata$f.20483.0.0[selfharmdata$f.20483.0.0==-818]<-NA
+
+covariates=c("PC1","PC2","PC3","PC4","PC5","PC6","batchL","AC","sexL","age")
+covariates_IID=c("IID","PC1","PC2","PC3","PC4","PC5","PC6","batchL","AC","sexL","age")
+pcs=selfharmdata[,covariates_IID,with=F]
+anti=fread("antidepressants_ID_06_march_updated.txt",verbose=T)
+
+
+numquant <- 20
+quant1 <- numquant + 1
+quantscz <- quant1 + 1
+ref <- ceiling(quantscz/2)
+scores <- cbind(selfharmdata$IID,selfharmdata$DEPR07_0.3)
+phenofile <- cbind(selfharmdata$IID,selfharmdata$f.20480.0.0)
+
+#creating the datframe
+colnames(phenofile)[c(1, 2)] <- c("ID", "pheno")
+anti$anti<-1
+colnames(anti)[1]<-"IID"
+phenofile=as.data.frame(phenofile)
+colnames(scores)=c("IID","scores")
+x <- merge(scores, anti, by = 1, all = T)
+
+forquant <- merge(x = x, by.x = "IID", y = phenofile, by.y = "ID", all.x=T, all.y=T) 
+forquant <-  merge(x = forquant, y = pcs, by = "IID",all.x=T,all.y=T )
+
+#merge with covariates
+dep=fread("DEPR_ids_HES_06_march.txt",verbose=T)
+dep=dep[!duplicated(dep)] #remove duplicated IDs
+dep2=fread("DEPR_ids_self_reported_06_march.txt",verbose=T)
+dep3=fread("DEPR_MHQ_11_march.txt",verbose=T)
+
+dep$HES_MDD=1;dep2$Self_MDD=1;dep3$MHQ_MDD=1
+
+dep=as.data.frame(dep);dep2=as.data.frame(dep2);dep3=as.data.frame(dep3)
+```
+
+#### Venn Diagram (Fig B in Appendix S1)
+
+```{r venn_diag_depr, eval=F,echo=T}
+venn.diagram(x = list(dep$V1 , dep2$V1 , dep3$f.eid),
+             category.names = c("ICD 9/10","Non-cancer\nillness\nself-report ",
+                                "MHQ self-report"),
+             filename = 'DEPR_cases_venn_diagramm_10_june.png',
+             imagetype="png",
+             fill = c('yellow', 'purple', 'green'),
+             cex=2.5, 
+             cat.cex=2.5,
+             cat.dist=c(0.04,0.04,0.02),
+             cat.fontface="bold",
+             height=5500,
+             width=5500
+             ) 
+```
+
+
+```{r show-cases-depr,echo=F,out.width="50%",fig.align='center'}
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/DEPR_cases_venn_diagramm.png")
+```
+
+
+#### Derive RR for DEPR
+```{r derive_RR_DEPR, echo=T, eval=F}
+#dep - ICD, dep2 - self-report.
+dep_data=merge(dep,dep2,by="V1",all.x=T,all.y=T)
+colnames(dep3)[1]<-"V1"
+dep_data=merge(dep_data,dep3,by="V1",all.x=T,all.y=T)
+
+colnames(dep_data)[1]<-"IID"
+
+
+#self-report or ICD = 23656 - see below
+dep_data_in=as.data.frame(dep_data$IID)
+dep_data_in$V2=1
+colnames(dep_data_in)=c("IID","dep")
+dep_data_out=merge(dep_data, dep_data_in, by="IID")
+
+forquant=merge(forquant,dep_data_in, by="IID",all.x=T,all.y=T)
+  
+
+forquant$quantiles <- as.numeric(cut(forquant$scores, 
+                                     breaks = quantile(forquant$scores, 
+                                                       probs = seq(0, 1, 1/numquant), 
+                                                       na.rm = T), 
+                                     include.lowest=T))
+
+depression_scores=forquant$scores[forquant$dep==1]
+
+depression_scores=depression_scores[!is.na(depression_scores)]
+
+#compare with thresholds
+mean_position=as.numeric(cut(-0.002278132, 
+                             breaks = quantile(forquant$scores, 
+                                               probs = seq(0, 1, 1/numquant), 
+                                               na.rm = T), 
+                             include.lowest=T))
+
+forquant$anti[is.na(forquant$anti)]<-0
+
+forquant$dep_anti=NA;forquant$dep_no_anti=NA
+forquant[which(forquant$dep==1 & forquant$anti==1),"dep_anti"] <- 1
+forquant[which(forquant$dep==1 & forquant$anti==0),"dep_no_anti"] <- 1
+
+depr_prs=forquant$scores[dep==1]
+
+forquant$quantiles <- with(forquant, 
+                           ifelse(!is.na(forquant$dep_no_anti), 
+                                  quant1, 
+                                  quantiles))
+
+forquant$quantiles <- with(forquant, 
+                           ifelse(!is.na(forquant$dep_anti), 
+                                  quantscz, 
+                                  quantiles))
+
+#if dep patient (medicated), assign a different quantile aka 22
+forquant$quantiles <- factor(forquant$quantiles, 
+                             levels = c(ref, 
+                                        seq(1, quantscz, 1)[seq(1, quantscz, 1) != ref]))
+
+a=forquant$pheno[forquant$quantiles == quant1] #unmedicated
+b=forquant$pheno[forquant$quantiles == quantscz] #medicated
+forquant$dep_med=NA
+forquant[which(forquant$dep==1 & forquant$anti==1),"dep_med"] <- 1
+forquant[which(forquant$dep==1 & forquant$anti==0),"dep_med"] <- 0
+
+chisq <- chisq.test(table(forquant$pheno, forquant$dep_med))
+       print(chisq) 
+
+# calculate the risk ratio
+RR <- exp(summary(glm(pheno ~ ., 
+                        family="poisson", 
+                        data=forquant[,c("pheno","quantiles",covariates)]
+                        ))$coefficients[1:quantscz,1])
+
+
+ConfIu <- RR + (1.96*summary(glm(pheno ~ quantiles, 
+                                   family="poisson", 
+                                   data = forquant))$coefficients[1:quantscz,2])
+
+ConfIl <- RR - (1.96*summary(glm(pheno ~ quantiles, 
+                                   family="poisson", 
+                                   data = forquant))$coefficients[1:quantscz,2])
+RR[1] <- 1
+ConfIu[1] <- 1
+ConfIl[1] <- 1
+list <- seq(1, quantscz, 1)
+list <- list[list != ref]
+quantable <- c(ref, list)
+quantdf <- data.frame(RR, ConfIu, ConfIl, quantable)
+colnames(quantdf) <- c("RR", "CIU", "CIL", "QUANT")
+quantdf <- quantdf[order(quantdf$QUANT),]
+quantdf$label <- c(rep("GenPop", numquant), "DEPRnomeds", "DEPRmeds")
+quantdf$label <- factor(quantdf$label, levels = c("GenPop", "DEPRnomeds", "DEPRmeds"))
+quantdf
+
+write.table(quantdf, file="RR_medications_split_quants_DEPR_self_report_or_ICD_or_MHQ_10_june.txt")
+```
+
+## Plot Figure 4
+
+```{r eval=F, echo=T, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(ggplot2)
+library(cowplot)
+
+get_legend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+
+
+y=read.table("RR_medications_split_quants_DEPR_self_report_or_ICD_or_MHQ_10_june.txt")
+y=as.data.frame(y)
+
+cols <- c("GenPop"="seagreen","DEPRnomeds"="deepskyblue3","DEPRmeds"="firebrick1")
+
+p <- ggplot(y) +
+  geom_point(aes(x = QUANT, 
+                 y = RR, 
+                 colour = label), 
+             size=1) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black",size=0.25)) +
+  geom_errorbar(aes(ymin = CIL,
+                    ymax = CIU, 
+                    x = QUANT, 
+                    colour = label), 
+                size = 0.25, 
+                width=1) +
+  ylab("RR of self-harm for MDD")+ 
+  theme(legend.position = "none") +
+  xlab("Quantiles for Polygenic Score") +
+  scale_colour_manual(name="",
+                      labels=c("GenPop"="General Population", 
+                               "DEPRnomeds"="Non-medicated cases", 
+                               "DEPRmeds"="Medicated cases"),
+                      values =cols) +
+  theme(axis.title = element_text(size = 10, 
+                                  colour="black", 
+                                  face="bold"),
+        axis.text=element_text(size=10, 
+                               colour="black",
+                               face="bold"))+
+  ylim(0,10)
+
+
+
+z=read.table("RR_medications_split_quants_SCHI_self_report_or_ICD_or_MHQ.txt")
+
+z=as.data.frame(z)
+
+cols <- c("GenPop"="seagreen","SCZnomeds"="deepskyblue3","SCZmeds"="firebrick1")
+
+q <- ggplot(z) +
+  geom_point(aes(x = QUANT, 
+                 y = RR, 
+                 colour = label), 
+             size=1) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black",size=0.25)) +
+  geom_errorbar(aes(ymin = CIL,
+                    ymax = CIU, 
+                    x = QUANT, 
+                    colour = label), 
+                size = 0.25, 
+                width=1) +
+  ylab("RR of self-harm for schizophrenia")+ 
+  theme(legend.position = "none") +
+  xlab("Quantiles for Polygenic Score") +
+  scale_colour_manual(values = cols) +
+  theme(axis.title = element_text(size = 10, 
+                                  colour="black", 
+                                  face="bold"),
+        axis.text=element_text(size=10, 
+                               colour="black", 
+                               face="bold"))+
+  ylim(0,10)
+
+
+legend<-get_legend(p+theme(legend.position=c(1,0.6),
+                           legend.justification="center",
+                           legend.box.just="top",
+                           legend.direction="horizontal",
+                           legend.text=element_text(size=10, 
+                                                    colour="black", 
+                                                    face="bold"))+
+                     guides(colour=guide_legend(reverse=T)))
+
+
+
+
+combined=plot_grid(q,p,
+                   labels=c("A","B"),
+                   label_size = 10,
+                   legend,rel_heights=c(1,.2))
+
+combined
+```
+
+![Figure_4](/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/Figure_4_20_Feb_2020.jpg)
+
+## Descriptive statistics
+
+Finding out number of participants in each process, proportion of males, females, etc. 
+``` {r echo=T, eval=F}
+####   more demgraphic analyses for flowchart in method draft
+## date: 24th April 2019
+#### wanted to know the age, sex, etc demographics for the final sample. 
+
+library(data.table)
+library(prettyR)
+library(tidyr)
+
+selfharmdata=fread("selfharm_small_15_Feb.txt")
+selfharmdatac<-selfharmdata[!is.na(selfharmdata$f.20480.0.0) & !is.na(selfharmdata$ADHD02_0.3) & !is.na(selfharmdata$PC1) 
+                          & !is.na(selfharmdata$PC2) & !is.na(selfharmdata$PC3)
+                          & !is.na(selfharmdata$PC4) & !is.na(selfharmdata$PC5) & !is.na(selfharmdata$PC6) 
+                          & !is.na(selfharmdata$batch) & !is.na(selfharmdata$age) & !is.na(selfharmdata$sex)
+                          & !is.na(selfharmdata$assessment_centre),]
+scz_diag=fread("scz_diagnosis_0706.txt")
+scz_diag=scz_diag[,-1]
+str(scz_diag)
+
+
+dep_diag=fread("dep_diagnosis_0706.txt")
+dep_diag=dep_diag[,-1]
+head(dep_diag)
+diag=merge(scz_diag,dep_diag,by="IID",all=T)
+
+dim(selfharmdata);dim(selfharmdatac)
+noNAselfharmdata<-selfharmdatac[selfharmdatac$f.20480.0.0!=-818,]
+dim(noNAselfharmdata)
+
+###07 June - descriptive stats for scz and dep, age, gender of each strata
+head(diag)
+selfharm_table=merge(noNAselfharmdata, diag, by="IID",all.x=T,all.y=F)
+selfharm_table$SCZ=replace_na(selfharm_table$SCZ,0)
+selfharm_table$dep=replace_na(selfharm_table$dep,0)
+dim(noNAselfharmdata);dim(selfharm_table)
+#create a loop:
+whole=selfharm_table
+selfharmed=selfharm_table[selfharm_table$f.20480.0.0==1]
+SSH=selfharm_table[selfharm_table$f.20483.0.0==1]
+NSSH=selfharm_table[selfharm_table$f.20483.0.0==0]
+controls=selfharm_table[selfharm_table$f.20480.0.0==0]
+
+table(controls$f.20480.0.0,useNA="always")
+table(NSSH$f.20483.0.0,useNA="always")
+table(SSH$f.20483.0.0,useNA="always")
+table(selfharmed$f.20480.0.0,useNA="always")
+
+
+#write a function to analyze systematically the female%,
+
+analyze <- function(data) {
+female=prop.table(table(data$sex))[1]*100
+mean_age=mean(data$age)
+sd_age=sd(data$age)
+scz=prop.table(table(data$SCZ))[2]*100
+dep=prop.table(table(data$dep))[2]*100
+row=c(female,mean_age,sd_age,scz,dep)
+names(row)=c("Female (%)","mean age","SD of age","Schizophrenia diagnosis (%)","MDD diagnosis (%)")
+row=round(row,2)
+return(row)
+}
+
+descriptives=rbind(analyze(whole),analyze(selfharmed),analyze(SSH),analyze(NSSH),analyze(controls))
+rownames(descriptives)=c("Full analytical sample",
+                         "Self-harmed",
+                         "SSH",
+                         "NSSH",
+                         "Never self-harmed")
+
+write.csv(descriptives, "descriptives_stats.csv")
+
+
+#check age
+table(selfharmdatac$f.20480.0.0)
+sum(table(selfharmdata$age)) #502543
+sum(table(selfharmdata$sex)) #502543
+summary(selfharmdatac$age)
+
+describe(selfharmdatac$age)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+#  48.00   60.00   67.00   65.88   72.00   82.00
+
+#   mean median   var   sd valid.n
+#x 65.88     67 59.15 7.69  126287
+
+#sex
+prop.table(table(selfharmdatac$sex))
+#        female 0       male  1
+#       0.5622748     0.4377252
+
+### -818 for selfharmed. 
+
+#merge with original self-harm data
+setwd("/mnt/lustre/groups/ukbiobank/Edinburgh_Data/usr/Kai/phenotypes")
+oriselfharm=fread("self_harmed_ori.txt")
+colnames(oriselfharm)<-c("IID","FID","selfharmori") #recode the selfharm ori column to avoid overlapping with f.20480.0.0
+colnames(selfharmdata)
+selfharm2<-merge(selfharmdata,oriselfharm, 
+                 by=c("IID","FID"), 
+                 all.x=T, 
+                 all.y=T)
+dim(selfharm2);dim(selfharmdata)
+
+#now see those who answered MHQ (including "prefer not to answer") and had "PRS"
+table(!is.na(selfharmdata$f.20480.0.0)&!is.na(selfharmdata$ADHD02_0.3))
+table(!is.na(selfharmdata$f.20480.0.0)) #number of ppl who answered MHQ
+#157358 - had MHQ
+#126287 - had MHQ and PRS
+sum(table((selfharmdatac$f.20483.0.0)))
+
+
+# found it : 126287 = number of people who answered MHQ + PRS data (including those answering "prefer not to answer")
+#new data: 126287-362=125925
+
+#number of ppl who self-harmed
+table(selfharmdata$f.20480.0.0)
+6872/(150011+6872) #=0.044
+```
+
+## Figure S1
+
+Figure S1 is a combination of 6 plots for variance accounted for by the PRS using different p-value thresholds in selecting the SNPs. 
+
+```{r PRS-plot,eval=F,echo=T}
+library(data.table)
+library(ggplot2)
+
+
+PRSdata=fread("PRS_forR2_0412_names.csv")
+colnames(PRSdata)[1]="names"
+
+"ADHD"->PRSdata$group[1:10]
+"Alcohol Dependence Disorder"->PRSdata$group[11:20]
+"Bipolar Disorder"->PRSdata$group[21:30]
+"Lifetime Cannabis Use"->PRSdata$group[31:40]
+"Major Depressive Disorder"->PRSdata$group[41:50]
+"Schizophrenia"->PRSdata$group[51:60]
+
+PRSdata$group=as.factor(PRSdata$group)
+
+#change p-value threshold
+PRSdata$names=c("1x10^-5","0.001","0.01","0.05","0.1","0.2","0.3","0.4","0.5","1")
+
+
+#change p-values
+PRSdata$print.p[round(PRSdata$`p-value`, digits = 3) != 0] <-
+        round(PRSdata$`p-value`[round(PRSdata$`p-value`, digits = 3) != 0], digits = 3)
+PRSdata$print.p[round(PRSdata$`p-value`, digits = 3) == 0] <-
+        format(PRSdata$`p-value`[round(PRSdata$`p-value`, digits = 3) == 0], digits = 2)
+PRSdata$print.p <- sub("e", "*x*10^", PRSdata$print.p)
+  
+
+PRSdata$print.p
+
+#change R2
+PRSdata$print.R2[round(PRSdata$R2, digits = 3) != 0] <-
+        round(PRSdata$R2[round(PRSdata$R2, digits = 3) != 0], digits = 3)
+PRSdata$print.R2[round(PRSdata$R2, digits = 3) == 0] <-
+        format(PRSdata$R2[round(PRSdata$R2, digits = 3) == 0], digits = 3)
+PRSdata$print.R2 <- sub("e", "*x*10^", PRSdata$R2)
+
+PRSdata$print.R2
+
+loopname=c("ADHD",
+           "Alcohol Dependence Disorder",
+           "Bipolar Disorder",
+           "Lifetime Cannabis Use",
+           "Major Depressive Disorder",
+           "Schizophrenia")
+
+
+
+
+
+theme_sam <- theme_bw()+
+             theme(axis.title=element_text(face="bold", size=18),
+                              axis.text=element_text(size=14),
+                              legend.title=element_text(face="bold", size=18),
+                              legend.text=element_text(size=14),
+                              axis.text.x=element_text(angle=45, hjust=1),
+                              panel.grid = element_blank(),
+                              panel.border = element_blank(), 
+                              axis.line = element_line(),
+                              plot.title = element_text(size=18, face="bold",hjust = 0.6)
+                              )
+
+for  (i in seq(from=1,to=length(loopname),by=1))
+{
+  PRSdata2=PRSdata[PRSdata$group==loopname[i],]
+  
+  PRSdata2$names <- factor(PRSdata2$names, as.character(PRSdata2$names))
+  
+  image=ggplot(PRSdata2, aes(x=factor(names),y=R2))+
+      geom_text(aes(label=paste(print.p)),vjust=-1.5,hjust=0,angle=45,cex=4,parse=T)+
+      theme_sam+
+      scale_y_continuous(limits=c(0,0.0046))+
+      geom_bar(aes(fill = -log10(`p-value`)), stat = "identity")+
+      xlab(expression(italic(P) - value ~ threshold ~ (italic(P)[T]))) +
+      ylab(expression(paste("PRS model fit:  ", R ^ 2)))+
+      scale_fill_gradient(
+        low = "#000099",
+        high = "#990010",
+        name = bquote(atop(-log[10] ~ model, italic(P) - value)),
+        limit = c(0,40))+
+        ggtitle(loopname[i])
+        
+ggsave(image,filename=paste("PRS_plot",loopname[i],".png",sep=""))
+  }
+```
+
+
+```{r include-figures, echo=F, fig.show='hold',out.width="50%"}
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotMajor Depressive Disorder.png")
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotADHD.png")
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotSchizophrenia.png")
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotBipolar Disorder.png")
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotAlcohol Dependence Disorder.png")
+knitr::include_graphics("/Users/kai/OneDrive - King's College London/2017 MSc GED PP/B1 Project/Github/PRS_plotLifetime Cannabis Use.png")
+
+
+```
+
+
+
