@@ -4,7 +4,7 @@ This is one of my PhD data science project. I used UK Biobank, a huge dataset wi
 
 R and bash scripts used for this project can be found [here](https://kai-lim.github.io/UKB_selfharm/). 
 
-We investigated 24 potential individual risk factors for self-harm, using their polygenic score as an index for genetic risks. Out of these 24 risk factors, major depressive disorder, attention-deficit hyperactivity disorder and schizophrenia appeared to be the most plausible causal risk factors for self-harm.
+We investigated 24 potential individual risk factors for self-harm, using their polygenic score as an index for genetic risks. Out of these 24 risk factors, major depressive disorder, attention-deficit hyperactivity disorder and schizophrenia appeared to be the most plausible **causal** risk factors for self-harm.
 No difference emerged between risk factors for non-suicidal and suicidal self-harm.
 
 
